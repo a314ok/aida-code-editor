@@ -7,34 +7,34 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use tauri::{AppHandle, Emitter, Runtime};
 
-pub struct LspState {
+pub struct DapState {
     pub child: Arc<Mutex<Option<std::process::Child>>>,
     pub stdin: Arc<Mutex<Option<std::process::ChildStdin>>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct LspCommandCandidate {
+pub struct DapCommandCandidate {
     pub cmd: String,
     pub args: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct ResolvedLspCommand {
+pub struct ResolvedDapCommand {
     pub cmd: String,
     pub args: Vec<String>,
     pub source: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct LspServerProbe {
+pub struct DapAdapterProbe {
     pub id: String,
     pub label: String,
     pub languages: Vec<String>,
-    pub candidates: Vec<LspCommandCandidate>,
+    pub candidates: Vec<DapCommandCandidate>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct LspServerStatus {
+pub struct DapAdapterStatus {
     pub id: String,
     pub label: String,
     pub languages: Vec<String>,
@@ -44,9 +44,9 @@ pub struct LspServerStatus {
 }
 
 #[tauri::command]
-pub fn start_lsp<R: Runtime>(
+pub fn start_dap<R: Runtime>(
     app: AppHandle<R>,
-    state: tauri::State<'_, LspState>,
+    state: tauri::State<'_, DapState>,
     cmd: String,
     args: Vec<String>,
     cwd: Option<String>,
@@ -61,85 +61,65 @@ pub fn start_lsp<R: Runtime>(
         .args(&args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        .stderr(Stdio::piped());
     if let Some(cwd) = cwd.as_ref() {
         command.current_dir(cwd);
     }
 
     let mut child = command
         .spawn()
-        .map_err(|e| format!("Failed to start LSP '{}': {}", cmd, e))?;
+        .map_err(|e| format!("Failed to start DAP adapter '{}': {}", cmd, e))?;
 
-    let stdout = child.stdout.take().ok_or("Failed to open stdout")?;
-    let stdin = child.stdin.take().ok_or("Failed to open stdin")?;
+    let stdout = child.stdout.take().ok_or("Failed to open DAP stdout")?;
+    let stderr = child.stderr.take();
+    let stdin = child.stdin.take().ok_or("Failed to open DAP stdin")?;
 
     *state.stdin.lock().unwrap() = Some(stdin);
     *state.child.lock().unwrap() = Some(child);
 
+    let stdout_app = app.clone();
     thread::spawn(move || {
         let mut reader = BufReader::new(stdout);
         loop {
-            let mut line = String::new();
-            match reader.read_line(&mut line) {
-                Ok(0) => break,
-                Err(_) => break,
-                Ok(_) => {}
+            let Some(len) = read_content_length(&mut reader) else {
+                break;
+            };
+
+            let mut body = vec![0u8; len];
+            if reader.read_exact(&mut body).is_err() {
+                break;
             }
 
-            if line.starts_with("Content-Length: ") {
-                if let Ok(len) = line["Content-Length: ".len()..].trim().parse::<usize>() {
-                    let mut empty_line = String::new();
-                    let _ = reader.read_line(&mut empty_line);
-
-                    let mut body = vec![0u8; len];
-                    if reader.read_exact(&mut body).is_ok() {
-                        let msg = String::from_utf8_lossy(&body).to_string();
-                        let _ = app.emit("lsp-message", msg);
-                    }
-                }
-            }
+            let msg = String::from_utf8_lossy(&body).to_string();
+            let _ = stdout_app.emit("dap-message", msg);
         }
     });
+
+    if let Some(stderr) = stderr {
+        let stderr_app = app.clone();
+        thread::spawn(move || {
+            let reader = BufReader::new(stderr);
+            for line in reader.lines().map_while(Result::ok) {
+                let _ = stderr_app.emit("dap-output", line);
+            }
+        });
+    }
 
     Ok(())
 }
 
 #[tauri::command]
-pub fn resolve_lsp_command(
-    candidates: Vec<LspCommandCandidate>,
-    cwd: Option<String>,
-) -> Result<Option<ResolvedLspCommand>, String> {
-    Ok(resolve_lsp_command_inner(&candidates, cwd.as_deref()))
+pub fn stop_dap(state: tauri::State<'_, DapState>) -> Result<(), String> {
+    *state.stdin.lock().unwrap() = None;
+    if let Some(mut child) = state.child.lock().unwrap().take() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    Ok(())
 }
 
 #[tauri::command]
-pub fn check_lsp_servers(
-    servers: Vec<LspServerProbe>,
-    cwd: Option<String>,
-) -> Result<Vec<LspServerStatus>, String> {
-    Ok(servers
-        .into_iter()
-        .map(|server| {
-            let resolved = resolve_lsp_command_inner(&server.candidates, cwd.as_deref());
-            LspServerStatus {
-                id: server.id,
-                label: server.label,
-                languages: server.languages,
-                available: resolved.is_some(),
-                command: resolved.as_ref().map(|cmd| {
-                    std::iter::once(cmd.cmd.clone())
-                        .chain(cmd.args.iter().cloned())
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                }),
-                source: resolved.map(|cmd| cmd.source),
-            }
-        })
-        .collect())
-}
-
-#[tauri::command]
-pub fn send_lsp_message(state: tauri::State<'_, LspState>, message: String) -> Result<(), String> {
+pub fn send_dap_message(state: tauri::State<'_, DapState>, message: String) -> Result<(), String> {
     if let Some(stdin) = state.stdin.lock().unwrap().as_mut() {
         let full_msg = format!(
             "Content-Length: {}\r\n\r\n{}",
@@ -154,10 +134,67 @@ pub fn send_lsp_message(state: tauri::State<'_, LspState>, message: String) -> R
     Ok(())
 }
 
-fn resolve_lsp_command_inner(
-    candidates: &[LspCommandCandidate],
+#[tauri::command]
+pub fn resolve_dap_command(
+    candidates: Vec<DapCommandCandidate>,
+    cwd: Option<String>,
+) -> Result<Option<ResolvedDapCommand>, String> {
+    Ok(resolve_dap_command_inner(&candidates, cwd.as_deref()))
+}
+
+#[tauri::command]
+pub fn check_dap_adapters(
+    adapters: Vec<DapAdapterProbe>,
+    cwd: Option<String>,
+) -> Result<Vec<DapAdapterStatus>, String> {
+    Ok(adapters
+        .into_iter()
+        .map(|adapter| {
+            let resolved = resolve_dap_command_inner(&adapter.candidates, cwd.as_deref());
+            DapAdapterStatus {
+                id: adapter.id,
+                label: adapter.label,
+                languages: adapter.languages,
+                available: resolved.is_some(),
+                command: resolved.as_ref().map(|cmd| {
+                    std::iter::once(cmd.cmd.clone())
+                        .chain(cmd.args.iter().cloned())
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                }),
+                source: resolved.map(|cmd| cmd.source),
+            }
+        })
+        .collect())
+}
+
+fn read_content_length<R: BufRead>(reader: &mut R) -> Option<usize> {
+    let mut content_length = None;
+
+    loop {
+        let mut line = String::new();
+        match reader.read_line(&mut line) {
+            Ok(0) | Err(_) => return None,
+            Ok(_) => {}
+        }
+
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        if trimmed.is_empty() {
+            return content_length;
+        }
+
+        if let Some((name, value)) = trimmed.split_once(':') {
+            if name.eq_ignore_ascii_case("content-length") {
+                content_length = value.trim().parse::<usize>().ok();
+            }
+        }
+    }
+}
+
+fn resolve_dap_command_inner(
+    candidates: &[DapCommandCandidate],
     cwd: Option<&str>,
-) -> Option<ResolvedLspCommand> {
+) -> Option<ResolvedDapCommand> {
     for candidate in candidates {
         if let Some(path) = resolve_command_path(&candidate.cmd, cwd) {
             let Some(args) = expand_command_args(&candidate.args, cwd) else {
@@ -166,7 +203,7 @@ fn resolve_lsp_command_inner(
             if !args_are_available(&args) {
                 continue;
             }
-            return Some(ResolvedLspCommand {
+            return Some(ResolvedDapCommand {
                 cmd: path,
                 args,
                 source: candidate.cmd.clone(),
@@ -210,7 +247,11 @@ fn args_are_available(args: &[String]) -> bool {
 fn app_root() -> Option<PathBuf> {
     let mut dir = env::current_dir().ok()?;
     loop {
-        if dir.join("scripts").join("aida-node-dap-adapter.mjs").exists() {
+        if dir
+            .join("scripts")
+            .join("aida-node-dap-adapter.mjs")
+            .exists()
+        {
             return Some(dir);
         }
         if !dir.pop() {

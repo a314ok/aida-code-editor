@@ -1,18 +1,28 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { onMounted, onUnmounted, ref } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { useEditorStore, type SearchResult } from '../stores/editor';
 import { Search, Loader2, X } from 'lucide-vue-next';
 
 const store = useEditorStore();
+const emit = defineEmits(['close']);
 const query = ref('');
+const replacement = ref('');
 const results = ref<SearchResult[]>([]);
 const loading = ref(false);
+const replacing = ref(false);
+const message = ref('');
+
+interface ReplaceSummary {
+  files_changed: number;
+  replacements: number;
+}
 
 const performSearch = async () => {
   if (!query.value.trim()) return;
   loading.value = true;
   results.value = [];
+  message.value = '';
   try {
     results.value = await invoke<SearchResult[]>('search_in_files', {
       path: store.currentProject ?? './',
@@ -24,11 +34,33 @@ const performSearch = async () => {
 
 const clearSearch = () => { query.value = ''; results.value = []; };
 
+const replaceInFiles = async () => {
+  if (!query.value.trim()) return;
+  if (!confirm(`Replace exact matches of "${query.value}" in project files?`)) return;
+  replacing.value = true;
+  message.value = '';
+  try {
+    const summary = await invoke<ReplaceSummary>('replace_in_files', {
+      path: store.currentProject ?? './',
+      pattern: query.value,
+      replacement: replacement.value,
+    });
+    await performSearch();
+    message.value = `Replaced ${summary.replacements} matches in ${summary.files_changed} files.`;
+  } catch (e: any) {
+    message.value = String(e);
+  } finally {
+    replacing.value = false;
+  }
+};
+
 const openResult = async (res: SearchResult) => {
   try {
     const content = await invoke<string>('read_file', { path: res.path });
     const name = res.path.split(/[/\\]/).pop() ?? 'file';
     store.openTab(res.path, name, content);
+    store.revealLocation(res.path, res.line);
+    emit('close');
   } catch {}
 };
 
@@ -40,10 +72,35 @@ const grouped = () => {
   }
   return map;
 };
+
+const handleKey = (e: KeyboardEvent) => {
+  if (e.key === 'Escape') emit('close');
+};
+
+onMounted(() => window.addEventListener('keydown', handleKey));
+onUnmounted(() => window.removeEventListener('keydown', handleKey));
 </script>
 
 <template>
-  <div class="flex flex-col h-full bg-[#0d0d11] overflow-hidden">
+  <Teleport to="body">
+    <div
+      class="fixed inset-0 z-[9998] flex items-start justify-center pt-16 bg-black/60"
+      @mousedown.self="emit('close')"
+    >
+      <div class="w-[760px] max-w-[calc(100vw-32px)] h-[72vh] flex flex-col bg-[#0d0d11] border border-white/9 rounded-xl shadow-[0_24px_56px_rgba(0,0,0,0.78)] overflow-hidden">
+        <div class="h-11 flex items-center justify-between px-4 border-b border-white/6 shrink-0 bg-[#0b0b0e]">
+          <div class="flex items-center gap-2 text-white/70">
+            <Search :size="14" class="text-blue-400/70" />
+            <span class="text-[12px] font-bold uppercase tracking-widest">Find in Files</span>
+          </div>
+          <button
+            @click="emit('close')"
+            class="p-1.5 rounded text-white/30 hover:text-white/70 hover:bg-white/6 transition-colors"
+            title="Close"
+          >
+            <X :size="14" />
+          </button>
+        </div>
 
     <!-- Search input -->
     <div class="p-3 border-b border-white/5 shrink-0">
@@ -68,6 +125,25 @@ const grouped = () => {
       </div>
       <div v-if="results.length" class="mt-1.5 text-[10px] text-white/25">
         {{ results.length }} збігів у {{ grouped().size }} файлах
+      </div>
+      <div class="mt-2 flex items-center gap-2">
+        <input
+          v-model="replacement"
+          type="text"
+          placeholder="Replace exact matches with..."
+          class="flex-1 bg-white/5 border border-white/8 rounded-md px-3 py-1.5 text-[12px] text-white/75 placeholder:text-white/25 focus:outline-none focus:border-white/20 transition-colors"
+        />
+        <button
+          @click="replaceInFiles"
+          :disabled="!query.trim() || replacing"
+          class="px-3 py-1.5 rounded-md border border-white/8 bg-white/5 text-[11px] font-bold text-white/55 hover:bg-white/8 hover:text-white/75 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+        >
+          <Loader2 v-if="replacing" :size="12" class="animate-spin" />
+          <span v-else>Replace</span>
+        </button>
+      </div>
+      <div v-if="message" class="mt-1.5 text-[10px] text-white/35">
+        {{ message }}
       </div>
     </div>
 
@@ -101,6 +177,8 @@ const grouped = () => {
       <div v-if="!query" class="px-4 py-8 text-center">
         <p class="text-[11px] text-white/20 italic">Введіть запит для пошуку по файлах</p>
       </div>
+        </div>
+      </div>
     </div>
-  </div>
+  </Teleport>
 </template>

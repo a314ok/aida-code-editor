@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useEditorStore, type FileEntry } from '../stores/editor';
@@ -11,9 +11,12 @@ import FileTreeItem from './FileTreeItem.vue';
 import GitPanel from './GitPanel.vue';
 
 const store = useEditorStore();
+const props = withDefaults(defineProps<{ initialTab?: 'files' | 'git' }>(), {
+  initialTab: 'files',
+});
 const emit = defineEmits(['close']);
 
-const activeTab = ref<'files' | 'git'>('files');
+const activeTab = ref<'files' | 'git'>(props.initialTab);
 const loading = ref(false);
 const expandedDirs = ref(new Set<string>());
 const quickSearch = ref('');
@@ -35,6 +38,8 @@ const extColor: Record<string, string> = {
   vue: 'text-emerald-400', html: 'text-red-400',
   css: 'text-sky-300', scss: 'text-pink-400',
   json: 'text-yellow-200', md: 'text-white/50',
+  yaml: 'text-red-300', yml: 'text-red-300', toml: 'text-orange-200',
+  sh: 'text-green-300', bash: 'text-green-300', zsh: 'text-green-300', dockerfile: 'text-blue-300',
 };
 
 const quickResults = computed(() => {
@@ -46,6 +51,7 @@ const quickResults = computed(() => {
 });
 
 const selectedIdx = ref(0);
+const projectName = (path: string) => path.replace(/\\/g, '/').split('/').filter(Boolean).pop() ?? path;
 
 /* ── git ─────────────────────────────────────────── */
 const loadGitStatus = async () => {
@@ -70,7 +76,7 @@ const loadFiles = async (path: string) => {
 
 const init = async () => {
   const path = store.currentProject ?? './';
-  if (!store.currentProject) store.currentProject = path;
+  if (!store.currentProject) store.addWorkspaceRoot(path);
   store.fileTree = await loadFiles(path);
   await loadGitStatus();
 };
@@ -78,21 +84,34 @@ const init = async () => {
 const openFolder = async () => {
   const selected = await open({ directory: true, multiple: false });
   if (selected && typeof selected === 'string') {
-    store.currentProject = selected;
+    store.addWorkspaceRoot(selected);
     expandedDirs.value.clear();
     await init();
   }
 };
 
-const openFile = async (file: FileEntry) => {
+const switchProject = async (path: string) => {
+  store.setCurrentProject(path);
+  expandedDirs.value.clear();
+  await init();
+};
+
+const removeProject = async (path: string) => {
+  store.removeWorkspaceRoot(path);
+  expandedDirs.value.clear();
+  await init();
+};
+
+const openFile = async (file: FileEntry, newWindow = false) => {
   try {
     const content = await invoke<string>('read_file', { path: file.path });
-    store.openTab(file.path, file.name, content);
+    if (newWindow) store.openFileInNewWindow(file.path, file.name, content);
+    else store.openTab(file.path, file.name, content);
     emit('close');
   } catch {}
 };
 
-const handleFileClick = async (file: FileEntry) => {
+const handleFileClick = async (file: FileEntry, event?: MouseEvent) => {
   if (file.kind === 'directory') {
     if (expandedDirs.value.has(file.path)) {
       expandedDirs.value.delete(file.path);
@@ -101,7 +120,7 @@ const handleFileClick = async (file: FileEntry) => {
       if (!file.children) file.children = await loadFiles(file.path);
     }
   } else {
-    await openFile(file);
+    await openFile(file, Boolean(event?.ctrlKey || event?.metaKey));
   }
 };
 
@@ -131,19 +150,25 @@ const handleKey = (e: KeyboardEvent) => {
   }
 };
 
-onMounted(() => { init(); window.addEventListener('keydown', handleKey); });
+onMounted(() => { if (props.initialTab === 'git') quickSearch.value = ''; init(); window.addEventListener('keydown', handleKey); });
 onUnmounted(() => window.removeEventListener('keydown', handleKey));
+watch(() => props.initialTab, tab => {
+  activeTab.value = tab;
+  if (tab === 'git') quickSearch.value = '';
+});
 </script>
 
 <template>
   <!-- Backdrop -->
   <div
-    class="fixed inset-0 z-[1000] flex items-start justify-center pt-16 bg-black/55 backdrop-blur-[2px]"
+    class="fixed inset-0 z-[1000] flex items-start justify-center pt-16 bg-black/60"
     @mousedown.self="emit('close')"
   >
     <!-- Panel -->
-    <div class="w-[540px] flex flex-col bg-[#0e0e14] border border-white/9 rounded-2xl shadow-[0_32px_80px_rgba(0,0,0,0.85)] overflow-hidden"
-      style="max-height: 72vh"
+    <div
+      class="flex flex-col bg-[#0e0e14] border border-white/9 rounded-2xl shadow-[0_24px_56px_rgba(0,0,0,0.78)] overflow-hidden transition-[width,height] duration-150"
+      :class="activeTab === 'git' ? 'w-[1120px] max-w-[calc(100vw-32px)] h-[82vh]' : 'w-[540px]'"
+      :style="activeTab === 'git' ? {} : { maxHeight: '72vh' }"
     >
 
       <!-- ── Search header ── -->
@@ -169,11 +194,29 @@ onUnmounted(() => window.removeEventListener('keydown', handleKey));
 
       <!-- ── Quick search results ── -->
       <template v-if="quickSearch.trim()">
+        <div class="flex items-center gap-1 bg-white/5 rounded-lg p-0.5 mx-3 mt-2 shrink-0">
+          <button
+            @click="activeTab = 'files'; quickSearch = ''"
+            class="flex items-center gap-1.5 px-3 py-1 rounded-md text-[11px] font-bold uppercase tracking-wider transition-all"
+            :class="activeTab === 'files' ? 'bg-white/10 text-white/80' : 'text-white/30 hover:text-white/55'"
+          >
+            <Files :size="12" />
+            Провідник
+          </button>
+          <button
+            @click="activeTab = 'git'; quickSearch = ''"
+            class="flex items-center gap-1.5 px-3 py-1 rounded-md text-[11px] font-bold uppercase tracking-wider transition-all"
+            :class="activeTab === 'git' ? 'bg-white/10 text-white/80' : 'text-white/30 hover:text-white/55'"
+          >
+            <GitBranch :size="12" />
+            Git
+          </button>
+        </div>
         <div class="flex-1 overflow-y-auto py-1" style="scrollbar-width:thin; scrollbar-color: rgba(255,255,255,0.07) transparent">
           <div
             v-for="(file, i) in quickResults"
             :key="file.path"
-            @click="openFile(file)"
+            @click="openFile(file, $event.ctrlKey || $event.metaKey)"
             @mouseenter="selectedIdx = i"
             class="flex items-center gap-3 px-4 py-2 cursor-pointer transition-colors"
             :class="selectedIdx === i ? 'bg-white/8' : 'hover:bg-white/5'"
@@ -247,6 +290,30 @@ onUnmounted(() => window.removeEventListener('keydown', handleKey));
           <span class="text-[10px] text-white/20 font-mono">
             {{ store.currentProject ? store.currentProject.replace(/\\/g, '/') : 'Немає відкритої папки' }}
           </span>
+        </div>
+
+        <div v-if="activeTab === 'files' && store.workspaceRoots.length" class="px-3 pb-2 shrink-0">
+          <div class="flex gap-1.5 overflow-x-auto pb-1" style="scrollbar-width:thin; scrollbar-color: rgba(255,255,255,0.07) transparent">
+            <div
+              v-for="root in store.workspaceRoots"
+              :key="root"
+              class="group flex items-center gap-1.5 rounded-md border px-2 py-1 shrink-0"
+              :class="store.currentProject === root ? 'border-emerald-300/20 bg-emerald-400/8 text-emerald-100/70' : 'border-white/7 bg-white/4 text-white/42 hover:text-white/65'"
+              :title="root"
+            >
+              <button class="text-[11px] max-w-40 truncate" @click="switchProject(root)">
+                {{ projectName(root) }}
+              </button>
+              <button
+                v-if="store.workspaceRoots.length > 1"
+                class="text-white/25 hover:text-rose-300"
+                @click.stop="removeProject(root)"
+                title="Remove workspace"
+              >
+                <X :size="11" />
+              </button>
+            </div>
+          </div>
         </div>
 
         <!-- Content -->

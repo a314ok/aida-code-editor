@@ -7,7 +7,7 @@ import {
   dropCursor, rectangularSelection, crosshairCursor, lineNumbers, highlightActiveLineGutter
 } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
-import { bracketMatching, foldGutter, indentOnInput, syntaxHighlighting, defaultHighlightStyle } from '@codemirror/language';
+import { bracketMatching, foldGutter, indentOnInput, indentUnit, syntaxHighlighting, defaultHighlightStyle, StreamLanguage } from '@codemirror/language';
 import { autocompletion, completionKeymap, closeBrackets, closeBracketsKeymap, type CompletionContext } from '@codemirror/autocomplete';
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 import { lintKeymap } from '@codemirror/lint';
@@ -23,11 +23,26 @@ import { vue } from '@codemirror/lang-vue';
 import { json } from '@codemirror/lang-json';
 import { markdown } from '@codemirror/lang-markdown';
 import { xml } from '@codemirror/lang-xml';
-import { vim, Vim } from '@replit/codemirror-vim';
-import { useEditorStore } from '../stores/editor';
+import { yaml } from '@codemirror/lang-yaml';
+import { shell } from '@codemirror/legacy-modes/mode/shell';
+import { toml } from '@codemirror/legacy-modes/mode/toml';
+import { dockerFile } from '@codemirror/legacy-modes/mode/dockerfile';
+import { getCM, vim } from '@replit/codemirror-vim';
+import { useEditorStore, type Tab } from '../stores/editor';
+import {
+  lspClient,
+  uriToPath,
+  type LspCodeAction,
+  type LspLocation,
+  type LspLocationLink,
+  type LspRange,
+  type LspTextEdit,
+  type LspWorkspaceEdit,
+} from '../lib/lsp';
 import { useFloating } from '../composables/useFloating';
 import { tabDrag } from '../composables/useTabDrag';
-import { X } from 'lucide-vue-next';
+import { isAltKey, isCode, isPrimaryKey } from '../lib/shortcuts';
+import { AlignLeft, Info, Lightbulb, ListTree, LocateFixed, Loader2, Pencil, X } from 'lucide-vue-next';
 
 /* ── props ──────────────────────────────────────── */
 const props = defineProps<{ windowId: string }>();
@@ -41,15 +56,42 @@ const activeTabPath = computed({
   get: () => win.value?.activeTabPath ?? null,
   set: (v) => { if (win.value) win.value.activeTabPath = v; },
 });
+const activeTab = computed(() => tabs.value.find(t => t.path === activeTabPath.value) ?? null);
 
 /* ── floating window ────────────────────────────── */
 const { pos, dragging, resizing, startDrag, startResize, initFromCanvas, bringToFront } =
   useFloating({ x: 8, y: 8, w: 800, h: 500 });
 
+const panelStyle = computed(() => ({
+  left: `${pos.x}px`,
+  top: `${pos.y}px`,
+  width: `${pos.w}px`,
+  height: `${pos.h}px`,
+  zIndex: pos.z,
+  backgroundColor: store.settings.panelColor,
+}));
+
+const applyWindowPos = (nextPos: { x: number; y: number; w: number; h: number }) => {
+  pos.x = nextPos.x;
+  pos.y = nextPos.y;
+  pos.w = nextPos.w;
+  pos.h = nextPos.h;
+};
+
 /* ── editor ─────────────────────────────────────── */
 const editorWrap = ref<HTMLElement | null>(null);
 let view: EditorView | null = null;
 let ro: ResizeObserver | null = null;
+let filePoll: number | null = null;
+
+type LspPanelState =
+  | { type: 'hover'; title: string; content: string }
+  | { type: 'references'; title: string; items: Array<{ path: string; line: number; column: number; label: string; location: LspLocation | LspLocationLink }> }
+  | { type: 'actions'; title: string; items: Array<{ title: string; action: LspCodeAction }> };
+
+const lspPanel = ref<LspPanelState | null>(null);
+const lspBusy = ref<string | null>(null);
+const lspMessage = ref('');
 
 const getExt = (name: string) => name.split('.').pop()?.toLowerCase() ?? '';
 
@@ -69,6 +111,10 @@ const getLang = (name: string) => {
     case 'json': case 'jsonc': return json();
     case 'md':   case 'mdx':  return markdown();
     case 'xml':  case 'svg':  return xml();
+    case 'yaml': case 'yml': return yaml();
+    case 'sh': case 'bash': case 'zsh': return StreamLanguage.define(shell);
+    case 'toml': return StreamLanguage.define(toml);
+    case 'dockerfile': return StreamLanguage.define(dockerFile);
     default:                return javascript();
   }
 };
@@ -78,6 +124,7 @@ const getLangLabel = (name: string) => {
     js:'JS', jsx:'JSX', ts:'TS', tsx:'TSX', rs:'Rust', go:'Go', py:'Python',
     html:'HTML', htm:'HTML', css:'CSS', scss:'SCSS', sass:'SASS', vue:'Vue',
     json:'JSON', jsonc:'JSON', md:'MD', mdx:'MDX', xml:'XML', svg:'SVG',
+    yaml:'YAML', yml:'YAML', sh:'Shell', bash:'Shell', zsh:'Shell', toml:'TOML', dockerfile:'Docker',
   };
   return m[getExt(name)] ?? 'Text';
 };
@@ -91,40 +138,46 @@ const getExtColor = (name: string) => {
     scss:'text-pink-400', sass:'text-pink-400', json:'text-amber-300',
     jsonc:'text-amber-300', md:'text-slate-400', mdx:'text-slate-400',
     xml:'text-orange-300', svg:'text-orange-300',
+    yaml:'text-red-300', yml:'text-red-300', sh:'text-green-300', bash:'text-green-300',
+    zsh:'text-green-300', toml:'text-orange-200', dockerfile:'text-blue-300',
   };
   return m[getExt(name)] ?? 'text-slate-400';
 };
 
-const editorTheme = EditorView.theme({
+const makeEditorTheme = () => {
+  const accent = store.settings.accentColor;
+  return EditorView.theme({
   '&': { height: '100%', background: 'transparent', color: '#abb2bf' },
-  '.cm-scroller': { overflow: 'auto', fontFamily: "'JetBrains Mono','Fira Code',monospace", fontSize: '13.5px', lineHeight: '1.65' },
-  '.cm-content': { caretColor: '#528bff', padding: '4px 0' },
+  '.cm-scroller': {
+    overflow: 'auto',
+    fontFamily: store.settings.fontFamily,
+    fontSize: `${store.settings.fontSize}px`,
+    lineHeight: '1.65',
+  },
+  '.cm-content': { caretColor: accent, padding: '4px 0' },
   '.cm-gutters': { background: 'transparent', color: '#3d4045', border: 'none', borderRight: '1px solid rgba(255,255,255,0.04)' },
   '.cm-lineNumbers .cm-gutterElement': { padding: '0 10px 0 6px', minWidth: '36px' },
   '.cm-activeLine': { background: 'rgba(255,255,255,0.02)' },
   '.cm-activeLineGutter': { background: 'rgba(255,255,255,0.02)', color: '#9da5b4' },
-  '.cm-cursor': { borderLeftColor: '#528bff', borderLeftWidth: '2px' },
-  '.cm-selectionBackground': { background: 'rgba(82,139,255,0.18) !important' },
-  '&.cm-focused .cm-selectionBackground': { background: 'rgba(82,139,255,0.22) !important' },
+  '.cm-cursor': { borderLeftColor: accent, borderLeftWidth: '2px' },
+  '.cm-selectionBackground': { background: `${accent}33 !important` },
+  '&.cm-focused .cm-selectionBackground': { background: `${accent}44 !important` },
   '.cm-tooltip': { background: '#18191e', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', boxShadow: '0 8px 32px rgba(0,0,0,0.6)' },
   '.cm-tooltip-autocomplete > ul > li': { padding: '4px 12px', fontSize: '12.5px' },
-  '.cm-tooltip-autocomplete > ul > li[aria-selected]': { background: 'rgba(82,139,255,0.25)' },
+  '.cm-tooltip-autocomplete > ul > li[aria-selected]': { background: `${accent}40` },
   '.cm-matchingBracket': { background: 'rgba(255,153,0,0.15)', color: '#ffa500 !important' },
 }, { dark: true });
+};
 
 const lspComplete = async (ctx: CompletionContext) => {
   if (!activeTabPath.value) return null;
   const word = ctx.matchBefore(/[\w.]/);
   if (!word || (word.from === word.to && !ctx.explicit)) return null;
   try {
-    const r = await invoke<any>('send_lsp_message', {
-      message: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method: 'textDocument/completion', params: {
-        textDocument: { uri: `file://${activeTabPath.value}` },
-        position: { line: store.cursorLine, character: store.cursorChar },
-      }})
-    });
-    if (!r?.items?.length) return null;
-    return { from: word.from, options: r.items.slice(0, 50).map((i: any) => ({
+    const r = await lspClient.completion(activeTabPath.value, store.cursorLine, store.cursorChar);
+    const items = Array.isArray(r) ? r : r?.items;
+    if (!items?.length) return null;
+    return { from: word.from, options: items.slice(0, 50).map((i: any) => ({
       label: i.label, type: i.kind === 3 ? 'function' : i.kind === 6 ? 'variable' : 'keyword', info: i.detail,
     }))};
   } catch { return null; }
@@ -134,6 +187,8 @@ const makeExtensions = (name: string) => {
   const exts = [
     lineNumbers(), highlightActiveLineGutter(), highlightSpecialChars(),
     history(), foldGutter(), drawSelection(), dropCursor(),
+    EditorState.tabSize.of(store.settings.tabSize),
+    indentUnit.of(' '.repeat(store.settings.tabSize)),
     EditorState.allowMultipleSelections.of(true), indentOnInput(),
     syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
     bracketMatching(), closeBrackets(),
@@ -142,7 +197,12 @@ const makeExtensions = (name: string) => {
     EditorView.updateListener.of(u => {
       if (u.docChanged && activeTabPath.value) {
         const t = tabs.value.find(t => t.path === activeTabPath.value);
-        if (t) t.isDirty = true;
+        if (t) {
+          const content = u.state.doc.toString();
+          t.content = content;
+          t.isDirty = true;
+          lspClient.didChange(activeTabPath.value, content);
+        }
       }
       if (u.selectionSet) {
         const p = u.state.selection.main.head;
@@ -152,7 +212,7 @@ const makeExtensions = (name: string) => {
       }
     }),
     keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap, ...historyKeymap, ...completionKeymap, ...lintKeymap, indentWithTab]),
-    getLang(name), oneDark, editorTheme,
+    getLang(name), oneDark, makeEditorTheme(),
   ];
   if (store.settings.vimEnabled) exts.unshift(vim());
   if (store.settings.wordWrap) exts.push(EditorView.lineWrapping);
@@ -177,8 +237,288 @@ const initEditor = (doc: string, name: string) => {
   view?.destroy();
   const state = EditorState.create({ doc, extensions: makeExtensions(name) });
   view = new EditorView({ state, parent: editorWrap.value });
+  const cm = getCM(view);
+  if (cm && typeof (cm as any).on === 'function') {
+    (cm as any).on('vim-mode-change', (m: any) => { store.vimMode = String(m.mode ?? 'normal').toUpperCase(); });
+  }
   // Double RAF: first frame allows browser layout, second ensures CodeMirror remeasures
   requestAnimationFrame(() => requestAnimationFrame(() => view?.requestMeasure()));
+};
+
+const revealLine = (line: number, column = 0) => {
+  if (!view) return;
+  const safeLine = Math.min(Math.max(1, line), view.state.doc.lines);
+  const docLine = view.state.doc.line(safeLine);
+  const pos = Math.min(docLine.to, docLine.from + Math.max(0, column));
+  view.dispatch({
+    selection: { anchor: pos },
+    effects: EditorView.scrollIntoView(pos, { y: 'center' }),
+  });
+  view.focus();
+  store.cursorLine = safeLine - 1;
+  store.cursorChar = pos - docLine.from;
+};
+
+const rangeFromSelection = (): LspRange => {
+  if (!view) {
+    return {
+      start: { line: store.cursorLine, character: store.cursorChar },
+      end: { line: store.cursorLine, character: store.cursorChar },
+    };
+  }
+
+  const selection = view.state.selection.main;
+  const anchor = view.state.doc.lineAt(selection.from);
+  const head = view.state.doc.lineAt(selection.to);
+  return {
+    start: { line: anchor.number - 1, character: selection.from - anchor.from },
+    end: { line: head.number - 1, character: selection.to - head.from },
+  };
+};
+
+const offsetForPosition = (doc: EditorState['doc'], line: number, character: number) => {
+  const safeLine = Math.min(Math.max(1, line + 1), doc.lines);
+  const docLine = doc.line(safeLine);
+  return Math.min(docLine.to, docLine.from + Math.max(0, character));
+};
+
+const offsetForText = (text: string, line: number, character: number) => {
+  const lines = text.split(/\r\n|\n|\r/);
+  let offset = 0;
+  for (let i = 0; i < Math.min(line, lines.length - 1); i++) {
+    offset += lines[i].length + 1;
+  }
+  return offset + Math.min(Math.max(0, character), lines[Math.min(line, lines.length - 1)]?.length ?? 0);
+};
+
+const findOpenTab = (path: string) => {
+  const normalized = store.normalizePath(path);
+  for (const editorWindow of store.editorWindows) {
+    const tab = editorWindow.tabs.find(t => t.path === normalized);
+    if (tab) return tab;
+  }
+  return null;
+};
+
+const applyTextEditsToView = (edits: LspTextEdit[]) => {
+  if (!view || !edits.length) return;
+  const changes = edits
+    .map(edit => ({
+      from: offsetForPosition(view!.state.doc, edit.range.start.line, edit.range.start.character),
+      to: offsetForPosition(view!.state.doc, edit.range.end.line, edit.range.end.character),
+      insert: edit.newText,
+    }))
+    .sort((a, b) => a.from - b.from || a.to - b.to);
+
+  view.dispatch({ changes });
+  const tab = activeTab.value;
+  if (tab && view) {
+    tab.content = view.state.doc.toString();
+    tab.isDirty = true;
+    lspClient.didChange(tab.path, tab.content);
+  }
+};
+
+const applyTextEditsToString = (content: string, edits: LspTextEdit[]) => {
+  let next = content;
+  const sorted = edits
+    .map(edit => ({
+      edit,
+      from: offsetForText(content, edit.range.start.line, edit.range.start.character),
+      to: offsetForText(content, edit.range.end.line, edit.range.end.character),
+    }))
+    .sort((a, b) => b.from - a.from || b.to - a.to);
+
+  for (const { edit, from, to } of sorted) {
+    next = `${next.slice(0, from)}${edit.newText}${next.slice(to)}`;
+  }
+  return next;
+};
+
+const editsByPath = (edit: LspWorkspaceEdit) => {
+  const grouped = new Map<string, LspTextEdit[]>();
+  if (edit.changes) {
+    for (const [uri, edits] of Object.entries(edit.changes)) {
+      grouped.set(store.normalizePath(uriToPath(uri)), edits);
+    }
+  }
+
+  for (const change of edit.documentChanges ?? []) {
+    const uri = change.textDocument?.uri;
+    if (!uri || !change.edits) continue;
+    const path = store.normalizePath(uriToPath(uri));
+    grouped.set(path, [...(grouped.get(path) ?? []), ...change.edits]);
+  }
+
+  return grouped;
+};
+
+const applyWorkspaceEdit = async (edit?: LspWorkspaceEdit) => {
+  if (!edit) return false;
+  const grouped = editsByPath(edit);
+  if (!grouped.size) return false;
+
+  for (const [path, edits] of grouped) {
+    if (path === activeTabPath.value && view) {
+      applyTextEditsToView(edits);
+      continue;
+    }
+
+    const opened = findOpenTab(path);
+    if (opened) {
+      opened.content = applyTextEditsToString(opened.content, edits);
+      opened.isDirty = true;
+      continue;
+    }
+
+    const content = await invoke<string>('read_file', { path });
+    await invoke('save_file', { path, content: applyTextEditsToString(content, edits) });
+  }
+
+  return true;
+};
+
+const locationRange = (location: LspLocation | LspLocationLink) =>
+  'targetUri' in location
+    ? (location.targetSelectionRange ?? location.targetRange)
+    : location.range;
+
+const locationUri = (location: LspLocation | LspLocationLink) =>
+  'targetUri' in location ? location.targetUri : location.uri;
+
+const openLspLocation = async (location: LspLocation | LspLocationLink) => {
+  const path = store.normalizePath(uriToPath(locationUri(location)));
+  const range = locationRange(location);
+  if (!path) return;
+
+  if (!findOpenTab(path)) {
+    const content = await invoke<string>('read_file', { path });
+    store.openTab(path, path.split(/[\\/]/).pop() ?? path, content);
+  } else {
+    activeTabPath.value = path;
+  }
+  store.revealLocation(path, range.start.line + 1, range.start.character);
+  lspPanel.value = null;
+};
+
+const hoverText = (contents: any): string => {
+  if (!contents) return '';
+  if (typeof contents === 'string') return contents;
+  if (Array.isArray(contents)) return contents.map(hoverText).filter(Boolean).join('\n\n');
+  if (typeof contents.value === 'string') return contents.value;
+  if (contents.language && contents.value) return `\`\`\`${contents.language}\n${contents.value}\n\`\`\``;
+  return String(contents);
+};
+
+const ensureLspForActive = async () => {
+  const tab = activeTab.value;
+  if (!tab || !view) return false;
+  const content = view.state.doc.toString();
+  tab.content = content;
+  return lspClient.ensureForFile(tab.path, tab.name, content, store.currentProject);
+};
+
+const runLspAction = async (action: 'hover' | 'definition' | 'references' | 'rename' | 'actions' | 'format') => {
+  const tab = activeTab.value;
+  if (!tab || !view || lspBusy.value) return;
+
+  lspBusy.value = action;
+  lspMessage.value = '';
+  try {
+    const hasLsp = await ensureLspForActive();
+    if (!hasLsp) {
+      lspMessage.value = 'No language server configured for this file.';
+      return;
+    }
+
+    if (action === 'hover') {
+      const result = await lspClient.hover(tab.path, store.cursorLine, store.cursorChar);
+      const content = hoverText(result?.contents).trim();
+      lspPanel.value = content
+        ? { type: 'hover', title: 'Hover', content }
+        : { type: 'hover', title: 'Hover', content: 'No hover info returned.' };
+    }
+
+    if (action === 'definition') {
+      const result = await lspClient.definition(tab.path, store.cursorLine, store.cursorChar);
+      const location = Array.isArray(result) ? result[0] : result;
+      if (location) await openLspLocation(location);
+      else lspMessage.value = 'No definition found.';
+    }
+
+    if (action === 'references') {
+      const result = await lspClient.references(tab.path, store.cursorLine, store.cursorChar);
+      const locations = (Array.isArray(result) ? result : []).filter(Boolean);
+      lspPanel.value = {
+        type: 'references',
+        title: `References (${locations.length})`,
+        items: locations.map((location: LspLocation | LspLocationLink) => {
+          const path = store.normalizePath(uriToPath(locationUri(location)));
+          const range = locationRange(location);
+          return {
+            path,
+            line: range.start.line + 1,
+            column: range.start.character,
+            label: `${path.split(/[\\/]/).pop() ?? path}:${range.start.line + 1}:${range.start.character + 1}`,
+            location,
+          };
+        }),
+      };
+    }
+
+    if (action === 'rename') {
+      const newName = prompt('New symbol name:');
+      if (!newName?.trim()) return;
+      const edit = await lspClient.rename(tab.path, store.cursorLine, store.cursorChar, newName.trim());
+      const applied = await applyWorkspaceEdit(edit);
+      lspMessage.value = applied ? 'Rename applied.' : 'Rename returned no edits.';
+    }
+
+    if (action === 'actions') {
+      const result = await lspClient.codeActions(tab.path, rangeFromSelection());
+      const actions = (Array.isArray(result) ? result : []).filter((item: any) => item?.title);
+      lspPanel.value = {
+        type: 'actions',
+        title: `Code Actions (${actions.length})`,
+        items: actions.map((codeAction: LspCodeAction) => ({
+          title: codeAction.title,
+          action: codeAction,
+        })),
+      };
+    }
+
+    if (action === 'format') {
+      const edits = await lspClient.formatDocument(tab.path, store.settings.tabSize);
+      if (Array.isArray(edits) && edits.length) {
+        applyTextEditsToView(edits);
+        lspMessage.value = 'Document formatted.';
+      } else {
+        lspMessage.value = 'Formatter returned no edits.';
+      }
+    }
+  } catch (e) {
+    lspMessage.value = String(e);
+  } finally {
+    lspBusy.value = null;
+    window.setTimeout(() => { lspMessage.value = ''; }, 3500);
+  }
+};
+
+const applyCodeAction = async (action: LspCodeAction) => {
+  lspBusy.value = 'actions';
+  try {
+    if (action.edit) await applyWorkspaceEdit(action.edit);
+    if (action.command?.command) {
+      await lspClient.executeCommand(action.command.command, action.command.arguments ?? []);
+    }
+    lspPanel.value = null;
+    lspMessage.value = 'Code action applied.';
+  } catch (e) {
+    lspMessage.value = String(e);
+  } finally {
+    lspBusy.value = null;
+    window.setTimeout(() => { lspMessage.value = ''; }, 3500);
+  }
 };
 
 const saveFile = async () => {
@@ -188,12 +528,57 @@ const saveFile = async () => {
     await invoke('save_file', { path: activeTabPath.value, content });
     const t = tabs.value.find(t => t.path === activeTabPath.value);
     if (t) { t.content = content; t.isDirty = false; }
+    lspClient.didSave(activeTabPath.value, content);
   } catch (e) { console.error('Save:', e); }
 };
 
+const syncLspOpen = async (tab: Tab) => {
+  try {
+    await lspClient.ensureForFile(tab.path, tab.name, tab.content, store.currentProject);
+  } catch {}
+};
+
+const refreshActiveFileFromDisk = async () => {
+  const path = activeTabPath.value;
+  if (!path || !view) return;
+  const tab = tabs.value.find(t => t.path === path);
+  if (!tab || tab.isDirty) return;
+  try {
+    const content = await invoke<string>('read_file', { path });
+    if (content === tab.content) return;
+    tab.content = content;
+    initEditor(content, tab.name);
+  } catch {}
+};
+
 const handleKeys = (e: KeyboardEvent) => {
-  if (e.ctrlKey && e.key === 'j') { e.preventDefault(); store.toggleTerminal(); }
-  if (e.ctrlKey && e.key === 's') { e.preventDefault(); saveFile(); }
+  if (store.activeWindowId !== props.windowId) return;
+  if (isPrimaryKey(e, 'Tab') || isPrimaryKey(e, 'Tab', { shift: true })) {
+    e.preventDefault();
+    e.stopPropagation();
+    store.switchTab(props.windowId, e.shiftKey ? -1 : 1);
+  }
+  if (isPrimaryKey(e, 'KeyJ')) { e.preventDefault(); store.toggleTerminal(); }
+  if (isPrimaryKey(e, 'KeyS')) { e.preventDefault(); saveFile(); }
+  if (isCode(e, 'F12') && !e.shiftKey) { e.preventDefault(); runLspAction('definition'); }
+  if (isCode(e, 'F12') && e.shiftKey) { e.preventDefault(); runLspAction('references'); }
+  if (isCode(e, 'F2')) { e.preventDefault(); runLspAction('rename'); }
+  if (isPrimaryKey(e, 'Period')) { e.preventDefault(); runLspAction('actions'); }
+  if (isAltKey(e, 'KeyF', { shift: true })) { e.preventDefault(); runLspAction('format'); }
+  if (isAltKey(e, 'KeyZ')) {
+    e.preventDefault();
+    store.settings.wordWrap = !store.settings.wordWrap;
+  }
+};
+
+const handleGlobalSave = () => {
+  if (store.activeWindowId === props.windowId) saveFile();
+};
+
+const handleLspActionEvent = (event: Event) => {
+  if (store.activeWindowId !== props.windowId) return;
+  const action = (event as CustomEvent<{ action: Parameters<typeof runLspAction>[0] }>).detail?.action;
+  if (action) runLspAction(action);
 };
 
 /* ── drag-and-drop ──────────────────────────────── */
@@ -242,16 +627,18 @@ const onPanelDrop = (e: DragEvent) => {
 
 /* ── lifecycle ──────────────────────────────────── */
 onMounted(async () => {
-  (Vim as any).on('vim-mode-change', (m: any) => { store.vimMode = m.mode.toUpperCase(); });
   window.addEventListener('keydown', handleKeys);
+  window.addEventListener('aida:save-active-file', handleGlobalSave);
+  window.addEventListener('aida:lsp-action', handleLspActionEvent);
+  window.addEventListener('focus', refreshActiveFileFromDisk);
+  filePoll = window.setInterval(refreshActiveFileFromDisk, 5000);
 
   await nextTick();
 
-  const initPos = win.value?.initPos;
-  if (initPos) {
-    pos.x = initPos.x; pos.y = initPos.y;
-    pos.w = initPos.w; pos.h = initPos.h;
-    if (win.value) win.value.initPos = undefined;
+  const restoredPos = win.value?.savedPos ?? win.value?.initPos;
+  if (restoredPos) {
+    applyWindowPos(restoredPos);
+    if (win.value?.initPos) win.value.initPos = undefined;
   } else {
     initFromCanvas(0, 0.68);
   }
@@ -260,11 +647,12 @@ onMounted(async () => {
   if (win.value) win.value.savedPos = { x: pos.x, y: pos.y, w: pos.w, h: pos.h };
 
   // RAF: browser finishes layout before CodeMirror measures
-  await new Promise<void>(r => requestAnimationFrame(r));
+  await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
 
   const path = activeTabPath.value;
   const tab = path ? tabs.value.find(t => t.path === path) : null;
   initEditor(tab?.content ?? WELCOME, tab?.name ?? 'welcome.js');
+  if (tab) syncLspOpen(tab);
 
   if (editorWrap.value) {
     ro = new ResizeObserver(() => view?.requestMeasure());
@@ -275,7 +663,7 @@ onMounted(async () => {
 // React to initPos set AFTER mount (e.g. session restore sets initPos on already-mounted w1)
 watch(() => win.value?.initPos, (ip) => {
   if (!ip) return;
-  pos.x = ip.x; pos.y = ip.y; pos.w = ip.w; pos.h = ip.h;
+  applyWindowPos(ip);
   if (win.value) { win.value.initPos = undefined; win.value.savedPos = ip; }
 });
 
@@ -283,14 +671,24 @@ watch(activeTabPath, (newPath) => {
   if (!newPath) { initEditor(WELCOME, 'welcome.js'); return; }
   const tab = tabs.value.find(t => t.path === newPath);
   if (!tab) return;
-  if (tab.name.endsWith('.go'))  invoke('start_lsp', { cmd: 'gopls', args: [] }).catch(() => {});
-  else if (tab.name.endsWith('.rs'))   invoke('start_lsp', { cmd: 'rust-analyzer', args: [] }).catch(() => {});
-  else if (tab.name.endsWith('.py'))   invoke('start_lsp', { cmd: 'pyright-langserver', args: ['--stdio'] }).catch(() => {});
-  else if (/\.[jt]sx?$/.test(tab.name)) invoke('start_lsp', { cmd: 'typescript-language-server', args: ['--stdio'] }).catch(() => {});
   initEditor(tab.content, tab.name);
+  syncLspOpen(tab);
+  const nav = store.navigationRequest;
+  if (nav?.path === newPath) requestAnimationFrame(() => revealLine(nav.line, nav.column));
 });
 
-watch(() => [store.settings.vimEnabled, store.settings.wordWrap], () => {
+watch(() => store.navigationRequest, (nav) => {
+  if (!nav || nav.path !== activeTabPath.value) return;
+  requestAnimationFrame(() => revealLine(nav.line, nav.column));
+});
+
+watch(() => [
+  store.settings.vimEnabled,
+  store.settings.wordWrap,
+  store.settings.fontSize,
+  store.settings.fontFamily,
+  store.settings.tabSize,
+], () => {
   const tab = tabs.value.find(t => t.path === activeTabPath.value);
   const doc  = view?.state.doc.toString() ?? tab?.content ?? WELCOME;
   initEditor(doc, tab?.name ?? 'welcome.js');
@@ -305,6 +703,10 @@ watch([dragging, resizing], ([d, r]) => {
 
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeys);
+  window.removeEventListener('aida:save-active-file', handleGlobalSave);
+  window.removeEventListener('aida:lsp-action', handleLspActionEvent);
+  window.removeEventListener('focus', refreshActiveFileFromDisk);
+  if (filePoll !== null) window.clearInterval(filePoll);
   ro?.disconnect();
   view?.destroy();
 });
@@ -313,12 +715,13 @@ onUnmounted(() => {
 <template>
   <!-- Floating editor panel -->
   <div
+    data-floating-window
     class="absolute flex flex-col rounded-xl border bg-[#111116] shadow-[0_8px_40px_rgba(0,0,0,0.6)] overflow-hidden transition-[border-color] duration-150"
     :class="[
       dropTarget ? 'border-blue-500/60' : 'border-white/8',
       dragging || resizing ? 'select-none' : '',
     ]"
-    :style="{ left: pos.x+'px', top: pos.y+'px', width: pos.w+'px', height: pos.h+'px', zIndex: pos.z }"
+    :style="panelStyle"
     @mousedown.capture="bringToFront(); store.activeWindowId = windowId"
     @dragover="onPanelDragOver"
     @dragleave="onPanelDragLeave"
@@ -382,6 +785,57 @@ onUnmounted(() => {
 
       <!-- Right: vim mode + cursor + close all -->
       <div class="ml-auto flex items-center gap-3 px-4 text-[11px] text-white/30 shrink-0" @mousedown.stop>
+        <div v-if="activeTabPath" class="flex items-center gap-1 border-r border-white/7 pr-3">
+          <button
+            @click="runLspAction('hover')"
+            class="p-1 rounded text-white/25 hover:text-sky-300 hover:bg-white/6 transition-colors disabled:opacity-30"
+            :disabled="!!lspBusy"
+            title="Hover"
+          >
+            <Loader2 v-if="lspBusy === 'hover'" :size="12" class="animate-spin" />
+            <Info v-else :size="12" />
+          </button>
+          <button
+            @click="runLspAction('definition')"
+            class="p-1 rounded text-white/25 hover:text-emerald-300 hover:bg-white/6 transition-colors disabled:opacity-30"
+            :disabled="!!lspBusy"
+            title="Go to Definition (F12)"
+          >
+            <LocateFixed :size="12" />
+          </button>
+          <button
+            @click="runLspAction('references')"
+            class="p-1 rounded text-white/25 hover:text-violet-300 hover:bg-white/6 transition-colors disabled:opacity-30"
+            :disabled="!!lspBusy"
+            title="References (Shift+F12)"
+          >
+            <ListTree :size="12" />
+          </button>
+          <button
+            @click="runLspAction('rename')"
+            class="p-1 rounded text-white/25 hover:text-amber-300 hover:bg-white/6 transition-colors disabled:opacity-30"
+            :disabled="!!lspBusy"
+            title="Rename Symbol (F2)"
+          >
+            <Pencil :size="12" />
+          </button>
+          <button
+            @click="runLspAction('actions')"
+            class="p-1 rounded text-white/25 hover:text-yellow-300 hover:bg-white/6 transition-colors disabled:opacity-30"
+            :disabled="!!lspBusy"
+            title="Code Actions (Ctrl+.)"
+          >
+            <Lightbulb :size="12" />
+          </button>
+          <button
+            @click="runLspAction('format')"
+            class="p-1 rounded text-white/25 hover:text-blue-300 hover:bg-white/6 transition-colors disabled:opacity-30"
+            :disabled="!!lspBusy"
+            title="Format Document (Shift+Alt+F)"
+          >
+            <AlignLeft :size="12" />
+          </button>
+        </div>
         <span
           class="font-bold px-1.5 py-0.5 rounded text-[10px] cursor-pointer"
           :class="{
@@ -400,10 +854,83 @@ onUnmounted(() => {
         </span>
         <button
           v-if="tabs.length > 0"
-          @click="[...tabs].forEach(t => store.closeTab(t.path, windowId))"
+          @click="store.closeAllTabs(windowId)"
           class="hover:text-white/70 transition-colors"
           title="Закрити всі"
         ><X :size="13" /></button>
+      </div>
+    </div>
+
+    <!-- LSP action popup -->
+    <div
+      v-if="lspPanel || lspMessage"
+      class="absolute top-12 right-3 z-40 w-[380px] max-w-[calc(100%-24px)] rounded-lg border border-white/9 bg-[#121217] shadow-[0_18px_48px_rgba(0,0,0,0.75)] overflow-hidden"
+      @mousedown.stop
+    >
+      <div v-if="lspPanel" class="h-9 flex items-center justify-between px-3 border-b border-white/6 bg-black/20">
+        <div class="flex items-center gap-2 min-w-0">
+          <Lightbulb v-if="lspPanel.type === 'actions'" :size="13" class="text-yellow-300/80 shrink-0" />
+          <ListTree v-else-if="lspPanel.type === 'references'" :size="13" class="text-violet-300/80 shrink-0" />
+          <Info v-else :size="13" class="text-sky-300/80 shrink-0" />
+          <span class="text-[11px] font-bold uppercase tracking-widest text-white/55 truncate">{{ lspPanel.title }}</span>
+        </div>
+        <button
+          @click="lspPanel = null"
+          class="p-1 rounded text-white/30 hover:text-white/70 hover:bg-white/6 transition-colors"
+          title="Close"
+        >
+          <X :size="13" />
+        </button>
+      </div>
+
+      <pre
+        v-if="lspPanel?.type === 'hover'"
+        class="max-h-[260px] overflow-auto whitespace-pre-wrap break-words p-3 text-[11px] leading-5 text-white/68 font-mono"
+      >{{ lspPanel.content }}</pre>
+
+      <div
+        v-else-if="lspPanel?.type === 'references'"
+        class="max-h-[280px] overflow-y-auto py-1"
+        style="scrollbar-width:thin; scrollbar-color: rgba(255,255,255,0.07) transparent"
+      >
+        <button
+          v-for="item in lspPanel.items"
+          :key="`${item.path}:${item.line}:${item.column}`"
+          @click="openLspLocation(item.location)"
+          class="w-full text-left px-3 py-2 hover:bg-white/5 transition-colors"
+        >
+          <span class="block text-[12px] text-white/70 truncate">{{ item.label }}</span>
+          <span class="block text-[10px] text-white/28 font-mono truncate">{{ item.path }}</span>
+        </button>
+        <div v-if="!lspPanel.items.length" class="px-3 py-5 text-center text-[12px] text-white/25 italic">
+          No references found
+        </div>
+      </div>
+
+      <div
+        v-else-if="lspPanel?.type === 'actions'"
+        class="max-h-[280px] overflow-y-auto py-1"
+        style="scrollbar-width:thin; scrollbar-color: rgba(255,255,255,0.07) transparent"
+      >
+        <button
+          v-for="item in lspPanel.items"
+          :key="item.title"
+          @click="applyCodeAction(item.action)"
+          class="w-full text-left px-3 py-2 hover:bg-white/5 transition-colors"
+        >
+          <span class="block text-[12px] text-white/72 truncate">{{ item.title }}</span>
+          <span v-if="item.action.kind" class="block text-[10px] text-white/28 font-mono truncate">{{ item.action.kind }}</span>
+        </button>
+        <div v-if="!lspPanel.items.length" class="px-3 py-5 text-center text-[12px] text-white/25 italic">
+          No code actions available
+        </div>
+      </div>
+
+      <div v-if="lspMessage && !lspPanel" class="px-3 py-2 text-[11px] text-white/55">
+        {{ lspMessage }}
+      </div>
+      <div v-else-if="lspMessage" class="px-3 py-2 border-t border-white/6 text-[11px] text-white/45">
+        {{ lspMessage }}
       </div>
     </div>
 
@@ -420,6 +947,13 @@ onUnmounted(() => {
         </span>
         <span>UTF-8</span>
         <span>{{ store.settings.tabSize }} spaces</span>
+        <span
+          v-if="store.activeLsp && store.activeLsp.path === activeTabPath"
+          :class="store.activeLsp.available ? 'text-emerald-400/60' : 'text-rose-400/60'"
+          :title="store.activeLsp.command"
+        >
+          LSP: {{ store.activeLsp.label }}
+        </span>
       </div>
       <div class="flex items-center gap-3">
         <span>{{ store.gitBranch }}</span>

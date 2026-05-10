@@ -2,70 +2,134 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { Search } from 'lucide-vue-next';
 import { useEditorStore } from '../stores/editor';
+import { getExtensionCommands, runExtensionCommand } from '../lib/extensions';
+import { isCode, isPrimaryKey } from '../lib/shortcuts';
 
 const store = useEditorStore();
 const isVisible = ref(false);
 const searchQuery = ref('');
 const selectedIndex = ref(0);
+const extensionVersion = ref(0);
 
-const emit = defineEmits(['openSettings']);
+const emit = defineEmits(['openSettings', 'openSearch', 'openProblems', 'openTasks', 'openDebug']);
 
-const allCommands = [
+const coreCommands = [
   { id: 'toggle-terminal', label: 'View: Toggle Terminal',      shortcut: 'Ctrl+J' },
   { id: 'open-settings',   label: 'Preferences: Open Settings', shortcut: 'Ctrl+,' },
+  { id: 'open-search',     label: 'Search: Find in Files',      shortcut: 'Ctrl+Shift+F' },
+  { id: 'open-problems',   label: 'View: Problems',             shortcut: 'Ctrl+Shift+M' },
+  { id: 'open-tasks',      label: 'Tasks: Run Task',             shortcut: 'Ctrl+Shift+B' },
+  { id: 'open-debug',      label: 'Debug: Open Debugger',        shortcut: 'Ctrl+Shift+D' },
   { id: 'save-file',       label: 'File: Save',                 shortcut: 'Ctrl+S' },
+  { id: 'lsp-hover',       label: 'LSP: Hover',                 shortcut: '' },
+  { id: 'lsp-definition',  label: 'LSP: Go to Definition',      shortcut: 'F12' },
+  { id: 'lsp-references',  label: 'LSP: Find References',       shortcut: 'Shift+F12' },
+  { id: 'lsp-rename',      label: 'LSP: Rename Symbol',         shortcut: 'F2' },
+  { id: 'lsp-actions',     label: 'LSP: Code Actions',          shortcut: 'Ctrl+.' },
+  { id: 'lsp-format',      label: 'LSP: Format Document',       shortcut: 'Shift+Alt+F' },
   { id: 'vim-toggle',      label: 'Editor: Toggle Vim Mode',    shortcut: '' },
   { id: 'word-wrap',       label: 'Editor: Toggle Word Wrap',   shortcut: 'Alt+Z' },
 ];
 
+const allCommands = computed(() => [
+  ...coreCommands,
+  ...getExtensionCommands().map(command => ({
+    id: command.id,
+    label: command.title,
+    shortcut: command.shortcut ?? '',
+    extension: true,
+  })),
+]);
+
 const filtered = computed(() => {
-  if (!searchQuery.value) return allCommands;
+  extensionVersion.value;
+  if (!searchQuery.value) return allCommands.value;
   const q = searchQuery.value.toLowerCase();
-  return allCommands.filter(c => c.label.toLowerCase().includes(q));
+  return allCommands.value.filter(c => c.label.toLowerCase().includes(q));
 });
 
 const executeCommand = (id: string) => {
   switch (id) {
     case 'toggle-terminal': store.toggleTerminal(); break;
     case 'open-settings':   emit('openSettings'); break;
+    case 'open-search':     emit('openSearch'); break;
+    case 'open-problems':   emit('openProblems'); break;
+    case 'open-tasks':      emit('openTasks'); break;
+    case 'open-debug':      emit('openDebug'); break;
+    case 'save-file':       window.dispatchEvent(new CustomEvent('aida:save-active-file')); break;
+    case 'lsp-hover':       window.dispatchEvent(new CustomEvent('aida:lsp-action', { detail: { action: 'hover' } })); break;
+    case 'lsp-definition':  window.dispatchEvent(new CustomEvent('aida:lsp-action', { detail: { action: 'definition' } })); break;
+    case 'lsp-references':  window.dispatchEvent(new CustomEvent('aida:lsp-action', { detail: { action: 'references' } })); break;
+    case 'lsp-rename':      window.dispatchEvent(new CustomEvent('aida:lsp-action', { detail: { action: 'rename' } })); break;
+    case 'lsp-actions':     window.dispatchEvent(new CustomEvent('aida:lsp-action', { detail: { action: 'actions' } })); break;
+    case 'lsp-format':      window.dispatchEvent(new CustomEvent('aida:lsp-action', { detail: { action: 'format' } })); break;
     case 'vim-toggle':      store.settings.vimEnabled = !store.settings.vimEnabled; break;
     case 'word-wrap':       store.settings.wordWrap = !store.settings.wordWrap; break;
+    default:                runExtensionCommand(id); break;
   }
   isVisible.value = false;
   searchQuery.value = '';
   selectedIndex.value = 0;
 };
 
+const refreshExtensions = () => { extensionVersion.value++; };
+
 const handleKeydown = (e: KeyboardEvent) => {
-  if ((e.ctrlKey || e.metaKey) && e.key === 'p') {
+  if (isPrimaryKey(e, 'KeyP')) {
     e.preventDefault();
     isVisible.value = !isVisible.value;
     if (isVisible.value) searchQuery.value = '';
   }
-  if ((e.ctrlKey || e.metaKey) && e.key === ',') {
+  if (isPrimaryKey(e, 'Comma')) {
     e.preventDefault();
     emit('openSettings');
   }
+  if (isPrimaryKey(e, 'KeyF', { shift: true })) {
+    e.preventDefault();
+    isVisible.value = false;
+    emit('openSearch');
+  }
+  if (isPrimaryKey(e, 'KeyM', { shift: true })) {
+    e.preventDefault();
+    isVisible.value = false;
+    emit('openProblems');
+  }
+  if (isPrimaryKey(e, 'KeyB', { shift: true })) {
+    e.preventDefault();
+    isVisible.value = false;
+    emit('openTasks');
+  }
+  if (isPrimaryKey(e, 'KeyD', { shift: true })) {
+    e.preventDefault();
+    isVisible.value = false;
+    emit('openDebug');
+  }
 
   if (!isVisible.value) return;
-  if (e.key === 'Escape') { isVisible.value = false; return; }
-  if (e.key === 'Enter' && filtered.value[selectedIndex.value]) {
+  if (isCode(e, 'Escape')) { isVisible.value = false; return; }
+  if (isCode(e, 'Enter') && filtered.value[selectedIndex.value]) {
     executeCommand(filtered.value[selectedIndex.value].id);
     return;
   }
-  if (e.key === 'ArrowDown') { e.preventDefault(); selectedIndex.value = (selectedIndex.value + 1) % filtered.value.length; }
-  if (e.key === 'ArrowUp')   { e.preventDefault(); selectedIndex.value = (selectedIndex.value - 1 + filtered.value.length) % filtered.value.length; }
+  if (isCode(e, 'ArrowDown')) { e.preventDefault(); selectedIndex.value = (selectedIndex.value + 1) % filtered.value.length; }
+  if (isCode(e, 'ArrowUp'))   { e.preventDefault(); selectedIndex.value = (selectedIndex.value - 1 + filtered.value.length) % filtered.value.length; }
 };
 
-onMounted(() => window.addEventListener('keydown', handleKeydown));
-onUnmounted(() => window.removeEventListener('keydown', handleKeydown));
+onMounted(() => {
+  window.addEventListener('keydown', handleKeydown);
+  window.addEventListener('aida:extensions-changed', refreshExtensions);
+});
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleKeydown);
+  window.removeEventListener('aida:extensions-changed', refreshExtensions);
+});
 </script>
 
 <template>
   <Teleport to="body">
     <div
       v-if="isVisible"
-      class="fixed inset-0 z-[10000] flex justify-center pt-20 bg-black/40 backdrop-blur-sm"
+      class="fixed inset-0 z-[10000] flex justify-center pt-20 bg-black/45"
       @mousedown.self="isVisible = false"
     >
       <div class="w-[560px] h-fit bg-[#141418] border border-white/9 shadow-2xl rounded-xl overflow-hidden">

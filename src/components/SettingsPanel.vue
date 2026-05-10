@@ -1,9 +1,12 @@
 <script setup lang="ts">
+import { onMounted, ref } from 'vue';
 import { useEditorStore } from '../stores/editor';
-import { X, Monitor, Type, Keyboard, Palette } from 'lucide-vue-next';
+import { lspClient } from '../lib/lsp';
+import { X, Monitor, Type, Keyboard, Palette, RefreshCw, Server } from 'lucide-vue-next';
 
 const store = useEditorStore();
 const emit = defineEmits(['close']);
+const checkingLsp = ref(false);
 
 const fontFamilies = [
   { label: 'JetBrains Mono', value: "'JetBrains Mono', monospace" },
@@ -12,10 +15,21 @@ const fontFamilies = [
   { label: 'Consolas', value: "'Consolas', monospace" },
   { label: 'Courier New', value: "'Courier New', monospace" },
 ];
+
+const checkLsp = async () => {
+  checkingLsp.value = true;
+  try {
+    store.setLspStatuses(await lspClient.checkServers(store.currentProject));
+  } finally {
+    checkingLsp.value = false;
+  }
+};
+
+onMounted(checkLsp);
 </script>
 
 <template>
-  <div class="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm">
+  <div class="fixed inset-0 z-[9999] flex items-center justify-center bg-black/55">
     <div class="w-[560px] bg-[#111] border border-border rounded-xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-150">
       <!-- Header -->
       <div class="flex items-center justify-between px-5 py-4 border-b border-border">
@@ -127,13 +141,44 @@ const fontFamilies = [
         <div class="flex flex-col gap-4">
           <div class="flex items-center gap-2 text-foreground/40">
             <Palette :size="13" />
+            <span class="text-[11px] font-bold uppercase tracking-widest">Theme</span>
+          </div>
+
+          <div class="grid grid-cols-3 gap-3">
+            <label class="flex flex-col gap-1.5">
+              <span class="text-xs text-foreground/60">Accent</span>
+              <input v-model="store.settings.accentColor" type="color" class="h-9 w-full rounded bg-transparent border border-white/10 p-1" />
+            </label>
+            <label class="flex flex-col gap-1.5">
+              <span class="text-xs text-foreground/60">Background</span>
+              <input v-model="store.settings.backgroundColor" type="color" class="h-9 w-full rounded bg-transparent border border-white/10 p-1" />
+            </label>
+            <label class="flex flex-col gap-1.5">
+              <span class="text-xs text-foreground/60">Panels</span>
+              <input v-model="store.settings.panelColor" type="color" class="h-9 w-full rounded bg-transparent border border-white/10 p-1" />
+            </label>
+          </div>
+        </div>
+
+        <!-- Keyboard shortcuts info -->
+        <div class="flex flex-col gap-4">
+          <div class="flex items-center gap-2 text-foreground/40">
+            <Palette :size="13" />
             <span class="text-[11px] font-bold uppercase tracking-widest">Keyboard Shortcuts</span>
           </div>
           <div class="grid grid-cols-2 gap-2">
             <div v-for="[key, action] in [
               ['Ctrl+S', 'Save File'],
-              ['Ctrl+B', 'Toggle Sidebar'],
+              ['Ctrl+Shift+F', 'Find in Files'],
+              ['Ctrl+Shift+M', 'Problems'],
+              ['Ctrl+Shift+B', 'Run Task'],
+              ['F12', 'Go to Definition'],
+              ['Shift+F12', 'Find References'],
+              ['F2', 'Rename Symbol'],
+              ['Ctrl+.', 'Code Actions'],
+              ['Shift+Alt+F', 'Format Document'],
               ['Ctrl+J', 'Toggle Terminal'],
+              ['Ctrl+Tab', 'Next File'],
               ['Ctrl+P', 'Command Palette'],
               ['Ctrl+F', 'Find in File'],
               ['Ctrl+H', 'Find & Replace'],
@@ -142,6 +187,46 @@ const fontFamilies = [
             ]" :key="key" class="flex items-center justify-between gap-2 py-1 px-2 rounded bg-white/3 border border-white/5">
               <span class="text-[11px] text-foreground/50">{{ action }}</span>
               <kbd class="text-[10px] font-mono bg-white/10 px-1.5 py-0.5 rounded text-foreground/60 whitespace-nowrap">{{ key }}</kbd>
+            </div>
+          </div>
+        </div>
+
+        <!-- LSP section -->
+        <div class="flex flex-col gap-4">
+          <div class="flex items-center justify-between gap-3">
+            <div class="flex items-center gap-2 text-foreground/40">
+              <Server :size="13" />
+              <span class="text-[11px] font-bold uppercase tracking-widest">Language Servers</span>
+            </div>
+            <button
+              @click="checkLsp"
+              class="p-1.5 rounded text-white/30 hover:text-white/70 hover:bg-white/6 transition-colors"
+              :class="{ 'animate-spin': checkingLsp }"
+              title="Check language servers"
+            >
+              <RefreshCw :size="13" />
+            </button>
+          </div>
+
+          <div class="grid grid-cols-1 gap-2">
+            <div
+              v-for="status in store.lspStatuses"
+              :key="status.id"
+              class="flex items-center justify-between gap-3 py-2 px-3 rounded bg-white/3 border border-white/5"
+            >
+              <div class="min-w-0">
+                <div class="text-[12px] text-foreground/75 truncate">{{ status.label }}</div>
+                <div class="text-[10px] text-foreground/30 font-mono truncate">{{ status.command || status.languages.join(', ') }}</div>
+              </div>
+              <span
+                class="text-[10px] font-bold px-2 py-0.5 rounded shrink-0"
+                :class="status.available ? 'text-emerald-300 bg-emerald-500/12' : 'text-rose-300 bg-rose-500/12'"
+              >
+                {{ status.available ? 'ready' : 'missing' }}
+              </span>
+            </div>
+            <div v-if="!store.lspStatuses.length && !checkingLsp" class="text-[12px] text-white/25 italic">
+              No language server check has run yet.
             </div>
           </div>
         </div>

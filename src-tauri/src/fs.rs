@@ -1,8 +1,8 @@
+use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::Path;
-use serde::{Serialize, Deserialize};
-use walkdir::WalkDir;
 use std::io::{BufRead, BufReader};
+use std::path::Path;
+use walkdir::WalkDir;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct FileEntry {
@@ -19,6 +19,57 @@ pub struct SearchResult {
     pub content: String,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ReplaceSummary {
+    pub files_changed: usize,
+    pub replacements: usize,
+}
+
+fn should_skip_tree_entry(name: &str) -> bool {
+    matches!(
+        name,
+        ".git" | "node_modules" | "target" | "__pycache__" | ".next" | "dist" | "dist-ssr"
+    )
+}
+
+fn should_skip_path(path: &Path) -> bool {
+    if path
+        .components()
+        .any(|component| should_skip_tree_entry(&component.as_os_str().to_string_lossy()))
+    {
+        return true;
+    }
+
+    if let Some(ext) = path.extension() {
+        let ext = ext.to_string_lossy().to_lowercase();
+        if matches!(
+            ext.as_str(),
+            "png"
+                | "jpg"
+                | "jpeg"
+                | "gif"
+                | "ico"
+                | "svg"
+                | "woff"
+                | "woff2"
+                | "ttf"
+                | "eot"
+                | "exe"
+                | "dll"
+                | "so"
+                | "bin"
+                | "zip"
+                | "tar"
+                | "gz"
+                | "pdf"
+        ) {
+            return true;
+        }
+    }
+
+    false
+}
+
 #[tauri::command]
 pub fn get_dir_tree(path: String) -> Result<Vec<FileEntry>, String> {
     let mut dirs: Vec<FileEntry> = Vec::new();
@@ -27,10 +78,13 @@ pub fn get_dir_tree(path: String) -> Result<Vec<FileEntry>, String> {
     for entry in fs::read_dir(&path).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         let p = entry.path();
-        let name = p.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let name = p
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
 
-        // Skip hidden files and common noise dirs
-        if name.starts_with('.') || name == "node_modules" || name == "target" || name == "__pycache__" {
+        if should_skip_tree_entry(&name) {
             continue;
         }
 
@@ -67,24 +121,8 @@ pub fn search_in_files(path: String, pattern: String) -> Result<Vec<SearchResult
         .filter(|e| e.file_type().is_file())
     {
         let file_path = entry.path();
-        let path_str = file_path.to_string_lossy();
-
-        if path_str.contains("node_modules")
-            || path_str.contains(".git")
-            || path_str.contains("target")
-            || path_str.contains("__pycache__")
-            || path_str.contains(".next")
-            || path_str.contains("dist")
-        {
+        if should_skip_path(file_path) {
             continue;
-        }
-
-        // Skip binary files by extension
-        if let Some(ext) = file_path.extension() {
-            let ext = ext.to_string_lossy().to_lowercase();
-            if matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "gif" | "ico" | "svg" | "woff" | "woff2" | "ttf" | "eot" | "exe" | "dll" | "so" | "bin" | "zip" | "tar" | "gz" | "pdf") {
-                continue;
-            }
         }
 
         if let Ok(file) = fs::File::open(file_path) {
@@ -108,6 +146,50 @@ pub fn search_in_files(path: String, pattern: String) -> Result<Vec<SearchResult
     }
 
     Ok(results)
+}
+
+#[tauri::command]
+pub fn replace_in_files(
+    path: String,
+    pattern: String,
+    replacement: String,
+) -> Result<ReplaceSummary, String> {
+    if pattern.is_empty() {
+        return Err("Search pattern cannot be empty".to_string());
+    }
+
+    let mut files_changed = 0;
+    let mut replacements = 0;
+
+    for entry in WalkDir::new(&path)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+    {
+        let file_path = entry.path();
+        if should_skip_path(file_path) {
+            continue;
+        }
+
+        let Ok(content) = fs::read_to_string(file_path) else {
+            continue;
+        };
+
+        let count = content.matches(&pattern).count();
+        if count == 0 {
+            continue;
+        }
+
+        let updated = content.replace(&pattern, &replacement);
+        fs::write(file_path, updated).map_err(|e| e.to_string())?;
+        files_changed += 1;
+        replacements += count;
+    }
+
+    Ok(ReplaceSummary {
+        files_changed,
+        replacements,
+    })
 }
 
 #[tauri::command]

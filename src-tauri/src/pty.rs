@@ -1,4 +1,4 @@
-use portable_pty::{native_pty_system, CommandBuilder, PtySize, MasterPty};
+use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -30,11 +30,20 @@ pub fn spawn_pty<R: Runtime>(
         CommandBuilder::new("bash")
     };
 
-    let mut _child = pair.slave.spawn_command(cmd).map_err(|e: anyhow::Error| e.to_string())?;
-    
-    let reader = pair.master.try_clone_reader().map_err(|e: anyhow::Error| e.to_string())?;
-    let writer = pair.master.take_writer().map_err(|e: anyhow::Error| e.to_string())?;
-    
+    let mut _child = pair
+        .slave
+        .spawn_command(cmd)
+        .map_err(|e: anyhow::Error| e.to_string())?;
+
+    let reader = pair
+        .master
+        .try_clone_reader()
+        .map_err(|e: anyhow::Error| e.to_string())?;
+    let writer = pair
+        .master
+        .take_writer()
+        .map_err(|e: anyhow::Error| e.to_string())?;
+
     *state.writer.lock().unwrap() = writer;
     *state.master.lock().unwrap() = Some(pair.master);
 
@@ -59,7 +68,9 @@ pub fn spawn_pty<R: Runtime>(
 #[tauri::command]
 pub fn write_pty(state: tauri::State<'_, PtyState>, data: String) -> Result<(), String> {
     let mut writer = state.writer.lock().unwrap();
-    writer.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
+    writer
+        .write_all(data.as_bytes())
+        .map_err(|e| e.to_string())?;
     writer.flush().map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -67,12 +78,14 @@ pub fn write_pty(state: tauri::State<'_, PtyState>, data: String) -> Result<(), 
 #[tauri::command]
 pub fn resize_pty(state: tauri::State<'_, PtyState>, rows: u16, cols: u16) -> Result<(), String> {
     if let Some(master) = state.master.lock().unwrap().as_ref() {
-        master.resize(PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        }).map_err(|e| e.to_string())?;
+        master
+            .resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| e.to_string())?;
     }
     Ok(())
 }

@@ -11,7 +11,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  click: [file: FileEntry];
+  click: [file: FileEntry, event: MouseEvent];
   refresh: [];
 }>();
 
@@ -53,7 +53,7 @@ const iconColor = computed(() => {
     md: 'text-white/50', mdx: 'text-white/50',
     xml: 'text-orange-300', svg: 'text-orange-300',
     toml: 'text-orange-200', yaml: 'text-red-300', yml: 'text-red-300',
-    sh: 'text-green-300', sql: 'text-blue-200',
+    sh: 'text-green-300', bash: 'text-green-300', zsh: 'text-green-300', dockerfile: 'text-blue-300', sql: 'text-blue-200',
   };
   return m[ext.value] ?? 'text-white/35';
 });
@@ -65,6 +65,7 @@ const extBadge = computed(() => {
     html: 'html', htm: 'html', css: 'css', scss: 'scss', sass: 'sass',
     json: 'json', jsonc: 'json', md: 'md', mdx: 'mdx',
     xml: 'xml', svg: 'svg', toml: 'toml', yaml: 'yaml', yml: 'yml',
+    sh: 'sh', bash: 'sh', zsh: 'zsh', dockerfile: 'dock',
   };
   return m[ext.value] ?? '';
 });
@@ -104,7 +105,7 @@ onUnmounted(() => window.removeEventListener('click', closeCtx));
 <template>
   <div class="relative">
     <div
-      @click="emit('click', item)"
+      @click="emit('click', item, $event)"
       @contextmenu="openCtx"
       class="flex items-center gap-1.5 py-0.5 mx-1 rounded cursor-pointer hover:bg-white/5 group transition-colors"
       :style="{ paddingLeft: (depth * 12 + 8) + 'px', paddingRight: '8px' }"
@@ -149,7 +150,7 @@ onUnmounted(() => window.removeEventListener('click', closeCtx));
         :item="child"
         :depth="depth + 1"
         :expanded-dirs="expandedDirs"
-        @click="(f: FileEntry) => emit('click', f)"
+        @click="(f: FileEntry, event: MouseEvent) => emit('click', f, event)"
         @refresh="emit('refresh')"
       />
     </div>

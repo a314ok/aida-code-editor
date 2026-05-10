@@ -1,3 +1,8 @@
+node_modules/
+*.log
+dist
+.vscode
+src-tauri/target/
 # Logs
 logs
 *.log
@@ -6,6 +11,8 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
+.codex-vite.*.log
+dev.log
 
 node_modules
 dist
