@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue';
-import { Bug, ChevronDown, GitBranch, Layers2, Settings2 } from 'lucide-vue-next';
+import { Bug, ChevronDown, GitBranch, Globe2, Layers2, LayoutTemplate, Send, Settings2 } from 'lucide-vue-next';
 import { useEditorStore } from '../stores/editor';
 import AidaLogo from './AidaLogo.vue';
 
@@ -10,7 +10,11 @@ const emit = defineEmits<{
   toggleMenu: [];
   openGit: [];
   openDebug: [];
+  openBrowser: [];
+  openApi: [];
+  openVisual: [];
   focusWindow: [windowId: string];
+  focusBrowserWindow: [windowId: string];
   openSettings: [];
 }>();
 
@@ -25,9 +29,18 @@ const windowTitle = (windowId: string) => {
   const tab = win?.tabs.find(t => t.path === win.activeTabPath) ?? win?.tabs[0];
   return tab?.name ?? 'Empty window';
 };
+const browserTitle = (windowId: string) => {
+  const win = store.getBrowserWindow(windowId);
+  const tab = win?.tabs.find(t => t.id === win.activeTabId) ?? win?.tabs[0];
+  return tab?.title ?? 'Browser';
+};
 
 const focusWindow = (windowId: string) => {
   emit('focusWindow', windowId);
+  showWindows.value = false;
+};
+const focusBrowserWindow = (windowId: string) => {
+  emit('focusBrowserWindow', windowId);
   showWindows.value = false;
 };
 
@@ -82,6 +95,33 @@ onUnmounted(() => window.removeEventListener('mousedown', handleGlobalMouseDown,
         <span>Debug</span>
       </button>
 
+      <button
+        class="flex items-center gap-1.5 bg-white/4 border border-white/7 rounded-md px-3 py-1 text-[12px] font-semibold text-white/45 hover:bg-white/8 hover:text-white/70 transition-colors shrink-0"
+        @click="emit('openBrowser')"
+        title="Browser window"
+      >
+        <Globe2 :size="13" />
+        <span>Browser</span>
+      </button>
+
+      <button
+        class="flex items-center gap-1.5 bg-white/4 border border-white/7 rounded-md px-3 py-1 text-[12px] font-semibold text-white/45 hover:bg-white/8 hover:text-white/70 transition-colors shrink-0"
+        @click="emit('openApi')"
+        title="API client"
+      >
+        <Send :size="13" />
+        <span>API</span>
+      </button>
+
+      <button
+        class="flex items-center gap-1.5 bg-white/4 border border-white/7 rounded-md px-3 py-1 text-[12px] font-semibold text-white/45 hover:bg-white/8 hover:text-white/70 transition-colors shrink-0"
+        @click="emit('openVisual')"
+        title="Visual builder"
+      >
+        <LayoutTemplate :size="13" />
+        <span>Visual</span>
+      </button>
+
       <div ref="taskbarRoot" class="relative shrink-0" @contextmenu.prevent="showWindows = !showWindows">
         <button
           class="flex items-center gap-1.5 bg-white/4 border border-white/7 rounded-md px-3 py-1 text-[12px] font-semibold text-white/45 hover:bg-white/8 hover:text-white/70 transition-colors"
@@ -90,7 +130,7 @@ onUnmounted(() => window.removeEventListener('mousedown', handleGlobalMouseDown,
         >
           <Layers2 :size="13" />
           <span>Windows</span>
-          <span class="text-[10px] text-white/30">{{ store.editorWindows.length }}</span>
+          <span class="text-[10px] text-white/30">{{ store.editorWindows.length + store.browserWindows.length }}</span>
         </button>
 
         <div
@@ -107,6 +147,17 @@ onUnmounted(() => window.removeEventListener('mousedown', handleGlobalMouseDown,
           >
             <span class="w-1.5 h-1.5 rounded-full shrink-0" :class="store.activeWindowId === win.id ? 'bg-emerald-300' : 'bg-white/20'"></span>
             <span class="truncate flex-1">{{ windowTitle(win.id) }}</span>
+            <span class="text-[10px] text-white/25 font-mono">{{ win.tabs.length }}</span>
+          </button>
+          <button
+            v-for="win in store.browserWindows"
+            :key="win.id"
+            class="w-full flex items-center gap-2 rounded-md px-2.5 py-2 text-left text-[12px] transition-colors"
+            :class="store.activeBrowserWindowId === win.id ? 'bg-white/10 text-white/85' : 'text-white/50 hover:bg-white/6 hover:text-white/75'"
+            @click="focusBrowserWindow(win.id)"
+          >
+            <Globe2 :size="12" class="text-white/35 shrink-0" />
+            <span class="truncate flex-1">{{ browserTitle(win.id) }}</span>
             <span class="text-[10px] text-white/25 font-mono">{{ win.tabs.length }}</span>
           </button>
         </div>

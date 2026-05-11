@@ -38,6 +38,15 @@ export interface EditorDiagnostic {
   source?: string;
 }
 
+export interface GitFileStatus {
+  path: string;
+  status: string;
+  staged: boolean;
+  worktree?: boolean;
+  index_status?: string | null;
+  worktree_status?: string | null;
+}
+
 export interface LspServerStatus {
   id: string;
   label: string;
@@ -64,6 +73,7 @@ export interface EditorSettings {
   accentColor: string;
   backgroundColor: string;
   panelColor: string;
+  keybindings: Record<string, string>;
 }
 
 export interface EditorWindowState {
@@ -75,6 +85,45 @@ export interface EditorWindowState {
   /** Last known position, persisted to localStorage */
   savedPos?: { x: number; y: number; w: number; h: number };
 }
+
+export interface BrowserTab {
+  id: string;
+  title: string;
+  url: string;
+  srcdoc?: string;
+  mode?: 'embed' | 'native';
+  nativeWindowLabel?: string;
+  nativeOpened?: boolean;
+}
+
+export interface BrowserWindowState {
+  id: string;
+  tabs: BrowserTab[];
+  activeTabId: string | null;
+  initPos?: { x: number; y: number; w: number; h: number };
+  savedPos?: { x: number; y: number; w: number; h: number };
+}
+
+export const DEFAULT_KEYBINDINGS: Record<string, string> = {
+  'command-palette': 'Ctrl+P',
+  'open-settings': 'Ctrl+,',
+  'open-search': 'Ctrl+Shift+F',
+  'open-problems': 'Ctrl+Shift+M',
+  'open-tasks': 'Ctrl+Shift+B',
+  'open-debug': 'Ctrl+Shift+D',
+  'open-browser': 'Ctrl+Shift+G',
+  'open-api': 'Ctrl+Shift+A',
+  'open-visual': 'Ctrl+Shift+V',
+  'save-file': 'Ctrl+S',
+  'next-file': 'Ctrl+Tab',
+  'prev-file': 'Ctrl+Shift+Tab',
+  'lsp-definition': 'F12',
+  'lsp-references': 'Shift+F12',
+  'lsp-rename': 'F2',
+  'lsp-actions': 'Ctrl+.',
+  'lsp-format': 'Shift+Alt+F',
+  'toggle-terminal': 'Ctrl+J',
+};
 
 export const useEditorStore = defineStore('editor', () => {
   const normalizePath = (path: string) => path.replace(/\\/g, '/');
@@ -102,6 +151,7 @@ export const useEditorStore = defineStore('editor', () => {
   }, { deep: true });
   const fileTree = ref<FileEntry[]>([]);
   const gitStatuses = ref<Record<string, string>>({});
+  const gitStatusEntries = ref<GitFileStatus[]>([]);
   const gitBranch = ref<string>('main');
   const diagnostics = ref<Record<string, EditorDiagnostic[]>>({});
   const lspStatuses = ref<LspServerStatus[]>([]);
@@ -115,10 +165,12 @@ export const useEditorStore = defineStore('editor', () => {
   const navigationRequest = ref<EditorNavigationRequest | null>(null);
 
   const activeWindowId = ref('w1');
+  const activeBrowserWindowId = ref<string | null>(null);
 
   const editorWindows = ref<EditorWindowState[]>([
     { id: 'w1', tabs: [], activeTabPath: null },
   ]);
+  const browserWindows = ref<BrowserWindowState[]>([]);
 
   const defaultSettings: EditorSettings = {
     fontSize: 14,
@@ -129,12 +181,14 @@ export const useEditorStore = defineStore('editor', () => {
     accentColor: '#5ee0b5',
     backgroundColor: '#0b0b0d',
     panelColor: '#111116',
+    keybindings: { ...DEFAULT_KEYBINDINGS },
   };
 
   const settings = reactive<EditorSettings>({ ...defaultSettings });
   try {
     const savedSettings = localStorage.getItem('aida:settings');
     if (savedSettings) Object.assign(settings, defaultSettings, JSON.parse(savedSettings));
+    settings.keybindings = { ...DEFAULT_KEYBINDINGS, ...(settings.keybindings ?? {}) };
   } catch {}
 
   watch(settings, v => {
@@ -151,6 +205,14 @@ export const useEditorStore = defineStore('editor', () => {
     return `w${Date.now()}`;
   }
 
+  function makeBrowserWindowId() {
+    return `b${Date.now()}`;
+  }
+
+  function makeBrowserTabId() {
+    return `bt${Date.now()}${Math.floor(Math.random() * 1000)}`;
+  }
+
   /* ── tab operations ─────────────────────────── */
 
   function openTab(path: string, name: string, content: string, windowId?: string) {
@@ -164,6 +226,21 @@ export const useEditorStore = defineStore('editor', () => {
     win.tabs.push(tab);
     win.activeTabPath = path;
     return tab;
+  }
+
+  function updateTabContent(path: string, content: string, dirty = true) {
+    const normalized = normalizePath(path);
+    for (const win of editorWindows.value) {
+      const tab = win.tabs.find(tab => tab.path === normalized);
+      if (!tab) continue;
+      tab.content = content;
+      tab.isDirty = dirty;
+      window.dispatchEvent(new CustomEvent('aida:tab-content-updated', {
+        detail: { path: normalized, content },
+      }));
+      return true;
+    }
+    return false;
   }
 
   function switchTab(windowId: string, direction: 1 | -1) {
@@ -274,6 +351,11 @@ export const useEditorStore = defineStore('editor', () => {
     };
   }
 
+  function nextBrowserWindowPosition() {
+    const pos = nextWindowPosition();
+    return { ...pos, w: Math.max(900, pos.w), h: Math.max(620, pos.h) };
+  }
+
   function openFileInNewWindow(path: string, name: string, content: string) {
     const newId = makeWindowId();
     const normalized = normalizePath(path);
@@ -285,6 +367,82 @@ export const useEditorStore = defineStore('editor', () => {
     });
     activeWindowId.value = newId;
     return newId;
+  }
+
+  function getBrowserWindow(id: string) {
+    return browserWindows.value.find(w => w.id === id);
+  }
+
+  function createBrowserTab(input: Partial<BrowserTab> = {}): BrowserTab {
+    const url = input.url ?? 'about:blank';
+    return {
+      id: input.id ?? makeBrowserTabId(),
+      title: input.title ?? (input.srcdoc ? 'Preview' : url),
+      url,
+      srcdoc: input.srcdoc,
+      mode: input.mode ?? 'embed',
+      nativeWindowLabel: input.nativeWindowLabel,
+      nativeOpened: input.nativeOpened,
+    };
+  }
+
+  function openBrowserWindow(input: Partial<BrowserTab> = {}) {
+    const id = makeBrowserWindowId();
+    const tab = createBrowserTab(input);
+    browserWindows.value.push({
+      id,
+      tabs: [tab],
+      activeTabId: tab.id,
+      initPos: nextBrowserWindowPosition(),
+    });
+    activeBrowserWindowId.value = id;
+    return id;
+  }
+
+  function closeBrowserWindow(id: string) {
+    browserWindows.value = browserWindows.value.filter(w => w.id !== id);
+    if (activeBrowserWindowId.value === id) {
+      activeBrowserWindowId.value = browserWindows.value[browserWindows.value.length - 1]?.id ?? null;
+    }
+  }
+
+  function addBrowserTab(windowId: string, input: Partial<BrowserTab> = {}) {
+    const win = getBrowserWindow(windowId);
+    if (!win) return null;
+    const tab = createBrowserTab(input);
+    win.tabs.push(tab);
+    win.activeTabId = tab.id;
+    return tab;
+  }
+
+  function closeBrowserTab(windowId: string, tabId: string) {
+    const win = getBrowserWindow(windowId);
+    if (!win) return;
+    const idx = win.tabs.findIndex(tab => tab.id === tabId);
+    if (idx === -1) return;
+    win.tabs.splice(idx, 1);
+    if (!win.tabs.length) {
+      closeBrowserWindow(windowId);
+      return;
+    }
+    if (win.activeTabId === tabId) {
+      win.activeTabId = win.tabs[Math.max(0, idx - 1)].id;
+    }
+  }
+
+  function updateBrowserTab(windowId: string, tabId: string, patch: Partial<BrowserTab>) {
+    const win = getBrowserWindow(windowId);
+    const tab = win?.tabs.find(tab => tab.id === tabId);
+    if (!tab) return;
+    Object.assign(tab, patch);
+  }
+
+  function switchBrowserTab(windowId: string, direction: 1 | -1) {
+    const win = getBrowserWindow(windowId);
+    if (!win?.tabs.length) return;
+    const currentIndex = Math.max(0, win.tabs.findIndex(tab => tab.id === win.activeTabId));
+    const nextIndex = (currentIndex + direction + win.tabs.length) % win.tabs.length;
+    win.activeTabId = win.tabs[nextIndex].id;
   }
 
   function revealLocation(path: string, line: number, column = 0) {
@@ -335,8 +493,15 @@ export const useEditorStore = defineStore('editor', () => {
         activeTabPath: w.activeTabPath,
         savedPos: w.savedPos ?? w.initPos,
       })),
+      browserWindows: browserWindows.value.map(w => ({
+        id: w.id,
+        tabs: w.tabs.map(t => ({ ...t })),
+        activeTabId: w.activeTabId,
+        savedPos: w.savedPos ?? w.initPos,
+      })),
       terminalOpen: isBottomPanelVisible.value,
       activeWindowId: activeWindowId.value,
+      activeBrowserWindowId: activeBrowserWindowId.value,
       currentProject: currentProject.value,
       workspaceRoots: workspaceRoots.value,
     };
@@ -344,8 +509,10 @@ export const useEditorStore = defineStore('editor', () => {
   }
 
   watch(editorWindows, saveSession, { deep: true });
+  watch(browserWindows, saveSession, { deep: true });
   watch(isBottomPanelVisible, saveSession);
   watch(activeWindowId, saveSession);
+  watch(activeBrowserWindowId, saveSession);
 
   /* ── misc ───────────────────────────────────── */
 
@@ -392,6 +559,7 @@ export const useEditorStore = defineStore('editor', () => {
     currentProject,
     fileTree,
     gitStatuses,
+    gitStatusEntries,
     gitBranch,
     diagnostics,
     lspStatuses,
@@ -403,13 +571,23 @@ export const useEditorStore = defineStore('editor', () => {
     cursorChar,
     navigationRequest,
     activeWindowId,
+    activeBrowserWindowId,
     editorWindows,
+    browserWindows,
     settings,
     getWindow,
     normalizePath,
     openTab,
+    updateTabContent,
     switchTab,
     openFileInNewWindow,
+    getBrowserWindow,
+    openBrowserWindow,
+    closeBrowserWindow,
+    addBrowserTab,
+    closeBrowserTab,
+    updateBrowserTab,
+    switchBrowserTab,
     closeTab,
     closeAllTabs,
     moveTabToWindow,

@@ -8,6 +8,8 @@ export function useFloating(init: Omit<WPos, 'z'>) {
   const pos = reactive<WPos>({ ...init, z: 10 });
   const dragging = ref(false);
   const resizing = ref(false);
+  const maximized = ref(false);
+  let restorePos: Omit<WPos, 'z'> | null = null;
 
   function bringToFront() {
     pos.z = ++zCounter;
@@ -76,5 +78,30 @@ export function useFloating(init: Omit<WPos, 'z'>) {
     }
   }
 
-  return { pos, dragging, resizing, startDrag, startResize, initFromCanvas, bringToFront };
+  function toggleMaximize() {
+    const c = document.getElementById('main-canvas');
+    if (!c) return false;
+
+    if (maximized.value && restorePos) {
+      pos.x = restorePos.x;
+      pos.y = restorePos.y;
+      pos.w = restorePos.w;
+      pos.h = restorePos.h;
+      restorePos = null;
+      maximized.value = false;
+      bringToFront();
+      return false;
+    }
+
+    restorePos = { x: pos.x, y: pos.y, w: pos.w, h: pos.h };
+    pos.x = c.scrollLeft + 12;
+    pos.y = c.scrollTop + 12;
+    pos.w = Math.max(320, c.clientWidth - 24);
+    pos.h = Math.max(220, c.clientHeight - 24);
+    maximized.value = true;
+    bringToFront();
+    return true;
+  }
+
+  return { pos, dragging, resizing, maximized, startDrag, startResize, initFromCanvas, bringToFront, toggleMaximize };
 }

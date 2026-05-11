@@ -42,6 +42,8 @@ pub fn run() {
             git::get_git_branch,
             git::git_stage_all,
             git::git_stage_file,
+            git::git_unstage_all,
+            git::git_unstage_file,
             git::get_git_diff,
             git::git_discard_file,
             git::git_apply_patch,
@@ -56,8 +58,13 @@ pub fn run() {
             git::git_push,
             git::git_pull,
             git::git_log,
+            git::git_graph_log,
             git::git_show,
             git::git_diff_refs,
+            git::git_blame,
+            git::git_fetch,
+            git::git_publish_branch,
+            git::git_resolve_conflict,
             lsp::start_lsp,
             lsp::resolve_lsp_command,
             lsp::check_lsp_servers,
@@ -70,6 +77,9 @@ pub fn run() {
             tasks::get_project_tasks,
             tasks::run_project_task,
             window::open_floating_window,
+            window::open_embedded_browser_view,
+            window::set_embedded_browser_view_bounds,
+            window::hide_embedded_browser_view,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

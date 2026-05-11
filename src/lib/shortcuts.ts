@@ -60,3 +60,38 @@ export function consumeShortcut(event: KeyboardEvent) {
   event.preventDefault();
   event.stopPropagation();
 }
+
+export function matchesShortcut(event: KeyboardEvent, shortcut?: string | null) {
+  if (!shortcut?.trim()) return false;
+  const parts = shortcut
+    .split('+')
+    .map(part => part.trim().toLowerCase())
+    .filter(Boolean);
+  let key = '';
+  for (let index = parts.length - 1; index >= 0; index--) {
+    if (!['ctrl', 'cmd', 'meta', 'shift', 'alt'].includes(parts[index])) {
+      key = parts[index];
+      break;
+    }
+  }
+  if (!key) return false;
+
+  const wantsPrimary = parts.includes('ctrl') || parts.includes('cmd') || parts.includes('meta');
+  const wantsShift = parts.includes('shift');
+  const wantsAlt = parts.includes('alt');
+
+  if (wantsPrimary !== primaryPressed(event)) return false;
+  if (wantsShift !== event.shiftKey) return false;
+  if (wantsAlt !== event.altKey) return false;
+
+  const eventKey = event.key.toLowerCase();
+  const eventCode = event.code.toLowerCase();
+  if (key === ',') return isCode(event, 'Comma');
+  if (key === '.') return isCode(event, 'Period');
+  if (key === 'tab') return isCode(event, 'Tab');
+  if (key === 'enter') return isCode(event, 'Enter');
+  if (key === 'escape' || key === 'esc') return isCode(event, 'Escape');
+  if (/^f\d{1,2}$/.test(key)) return eventKey === key || eventCode === key;
+  if (key.length === 1 && /[a-z]/.test(key)) return eventKey === key || isCode(event, `Key${key.toUpperCase()}`);
+  return eventKey === key || eventCode === key;
+}

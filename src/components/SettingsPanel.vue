@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue';
-import { useEditorStore } from '../stores/editor';
+import { DEFAULT_KEYBINDINGS, useEditorStore } from '../stores/editor';
 import { lspClient } from '../lib/lsp';
 import { X, Monitor, Type, Keyboard, Palette, RefreshCw, Server } from 'lucide-vue-next';
 
@@ -16,6 +16,30 @@ const fontFamilies = [
   { label: 'Courier New', value: "'Courier New', monospace" },
 ];
 
+const keyBindingRows = [
+  ['command-palette', 'Command Palette'],
+  ['save-file', 'Save File'],
+  ['open-search', 'Find in Files'],
+  ['open-problems', 'Problems'],
+  ['open-tasks', 'Run Task'],
+  ['open-debug', 'Debugger'],
+  ['open-browser', 'Browser Window'],
+  ['open-api', 'API Client'],
+  ['open-visual', 'Visual Builder'],
+  ['toggle-terminal', 'Toggle Terminal'],
+  ['next-file', 'Next File'],
+  ['prev-file', 'Previous File'],
+  ['lsp-definition', 'Go to Definition'],
+  ['lsp-references', 'Find References'],
+  ['lsp-rename', 'Rename Symbol'],
+  ['lsp-actions', 'Code Actions'],
+  ['lsp-format', 'Format Document'],
+] as const;
+
+const resetKeybindings = () => {
+  store.settings.keybindings = { ...DEFAULT_KEYBINDINGS };
+};
+
 const checkLsp = async () => {
   checkingLsp.value = true;
   try {
@@ -30,7 +54,7 @@ onMounted(checkLsp);
 
 <template>
   <div class="fixed inset-0 z-[9999] flex items-center justify-center bg-black/55">
-    <div class="w-[560px] bg-[#111] border border-border rounded-xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-150">
+    <div class="w-[920px] max-w-[calc(100vw-32px)] h-[78vh] flex flex-col bg-[#111] border border-border rounded-xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-150">
       <!-- Header -->
       <div class="flex items-center justify-between px-5 py-4 border-b border-border">
         <div class="flex items-center gap-2">
@@ -42,9 +66,9 @@ onMounted(checkLsp);
         </button>
       </div>
 
-      <div class="p-5 flex flex-col gap-6 max-h-[70vh] overflow-y-auto">
+      <div class="p-5 grid grid-cols-2 gap-4 min-h-0 overflow-y-auto" style="scrollbar-width:thin; scrollbar-color: rgba(255,255,255,0.08) transparent">
         <!-- Editor section -->
-        <div class="flex flex-col gap-4">
+        <div class="flex flex-col gap-4 rounded-xl border border-white/6 bg-white/[0.03] p-4">
           <div class="flex items-center gap-2 text-foreground/40">
             <Type :size="13" />
             <span class="text-[11px] font-bold uppercase tracking-widest">Editor</span>
@@ -113,7 +137,7 @@ onMounted(checkLsp);
         </div>
 
         <!-- Vim section -->
-        <div class="flex flex-col gap-4">
+        <div class="flex flex-col gap-4 rounded-xl border border-white/6 bg-white/[0.03] p-4">
           <div class="flex items-center gap-2 text-foreground/40">
             <Keyboard :size="13" />
             <span class="text-[11px] font-bold uppercase tracking-widest">Vim</span>
@@ -138,7 +162,7 @@ onMounted(checkLsp);
         </div>
 
         <!-- Keyboard shortcuts info -->
-        <div class="flex flex-col gap-4">
+        <div class="flex flex-col gap-4 rounded-xl border border-white/6 bg-white/[0.03] p-4">
           <div class="flex items-center gap-2 text-foreground/40">
             <Palette :size="13" />
             <span class="text-[11px] font-bold uppercase tracking-widest">Theme</span>
@@ -161,7 +185,39 @@ onMounted(checkLsp);
         </div>
 
         <!-- Keyboard shortcuts info -->
-        <div class="flex flex-col gap-4">
+        <div class="flex flex-col gap-4 rounded-xl border border-white/6 bg-white/[0.03] p-4">
+          <div class="flex items-center justify-between gap-3">
+            <div class="flex items-center gap-2 text-foreground/40">
+              <Keyboard :size="13" />
+              <span class="text-[11px] font-bold uppercase tracking-widest">Keyboard Shortcuts</span>
+            </div>
+            <button
+              @click="resetKeybindings"
+              class="rounded border border-white/8 bg-white/4 px-2 py-1 text-[10px] text-white/42 hover:text-white/70 hover:bg-white/8 transition-colors"
+            >
+              Reset
+            </button>
+          </div>
+          <div class="grid grid-cols-2 gap-2">
+            <label
+              v-for="[id, action] in keyBindingRows"
+              :key="id"
+              class="flex items-center justify-between gap-2 py-1 px-2 rounded bg-white/3 border border-white/5"
+            >
+              <span class="text-[11px] text-foreground/50 truncate">{{ action }}</span>
+              <input
+                v-model="store.settings.keybindings[id]"
+                class="w-28 bg-black/25 border border-white/8 rounded px-1.5 py-1 text-[10px] font-mono text-foreground/65 outline-none focus:border-white/20"
+              />
+            </label>
+          </div>
+          <div class="text-[11px] text-foreground/35">
+            Format examples: Ctrl+Shift+F, F12, Shift+Alt+F.
+          </div>
+        </div>
+
+        <!-- Default shortcut reference -->
+        <div class="hidden">
           <div class="flex items-center gap-2 text-foreground/40">
             <Palette :size="13" />
             <span class="text-[11px] font-bold uppercase tracking-widest">Keyboard Shortcuts</span>
@@ -192,7 +248,7 @@ onMounted(checkLsp);
         </div>
 
         <!-- LSP section -->
-        <div class="flex flex-col gap-4">
+        <div class="flex flex-col gap-4 rounded-xl border border-white/6 bg-white/[0.03] p-4 col-span-2">
           <div class="flex items-center justify-between gap-3">
             <div class="flex items-center gap-2 text-foreground/40">
               <Server :size="13" />

@@ -14,6 +14,7 @@ import {
 } from 'lucide-vue-next';
 import { dapClient, getDapAdapterProbes, joinCommandLine, splitCommandLine, type DapAdapterStatus, type DapMessage } from '../lib/dap';
 import { useEditorStore } from '../stores/editor';
+import { isCode } from '../lib/shortcuts';
 
 const store = useEditorStore();
 const emit = defineEmits(['close']);
@@ -53,6 +54,13 @@ const activeTab = computed(() => {
 const selectedStatus = computed(() => adapterStatuses.value.find(item => item.id === selectedAdapter.value));
 const availableAdapters = computed(() => adapterStatuses.value.filter(item => item.available));
 const canControl = computed(() => running.value && currentThreadId.value !== null);
+const debugStepLabel = computed(() => {
+  if (!selectedStatus.value?.available && selectedAdapter.value !== 'custom') return 'Install or select an adapter';
+  if (!program.value.trim() && requestType.value === 'launch') return 'Choose a program to launch';
+  if (requestType.value === 'attach' && !processId.value.trim()) return 'Choose a process to attach';
+  if (!breakpoints.value.length) return 'Optional: add breakpoints';
+  return running.value ? 'Session is live' : 'Ready to start';
+});
 
 const appendOutput = (line: string) => {
   output.value = [...output.value.slice(-399), line];
@@ -308,6 +316,21 @@ const handleDapEvent = (event: Event) => {
   }
 };
 
+const handleKeys = (event: KeyboardEvent) => {
+  if (isCode(event, 'F5')) {
+    event.preventDefault();
+    if (event.shiftKey) void stopDebug();
+    else if (running.value) void runControl('continue');
+    else void startDebug();
+  } else if (isCode(event, 'F10')) {
+    event.preventDefault();
+    void runControl('next');
+  } else if (isCode(event, 'F11')) {
+    event.preventDefault();
+    void runControl(event.shiftKey ? 'stepOut' : 'stepIn');
+  }
+};
+
 watch(selectedAdapter, syncSelectedAdapterCommand);
 watch(activeTab, tab => {
   if (!tab) return;
@@ -322,11 +345,13 @@ onMounted(() => {
     breakpointPath.value = activeTab.value.path;
   }
   window.addEventListener('aida:dap-event', handleDapEvent);
+  window.addEventListener('keydown', handleKeys);
 });
 
 onUnmounted(() => {
   if (configurationTimer !== null) window.clearTimeout(configurationTimer);
   window.removeEventListener('aida:dap-event', handleDapEvent);
+  window.removeEventListener('keydown', handleKeys);
 });
 </script>
 
@@ -336,11 +361,12 @@ onUnmounted(() => {
       class="fixed inset-0 z-[1000] flex items-start justify-center pt-10 bg-black/60"
       @mousedown.self="emit('close')"
     >
-      <div class="w-[980px] max-w-[calc(100vw-32px)] h-[78vh] flex flex-col bg-[#0e0e14] border border-white/9 rounded-2xl shadow-[0_24px_56px_rgba(0,0,0,0.78)] overflow-hidden">
+      <div class="w-[1120px] max-w-[calc(100vw-32px)] h-[82vh] flex flex-col bg-[#0e0e14] border border-white/9 rounded-2xl shadow-[0_24px_56px_rgba(0,0,0,0.78)] overflow-hidden">
         <div class="h-11 flex items-center justify-between gap-3 px-4 border-b border-white/6 shrink-0">
           <div class="flex items-center gap-2 min-w-0">
             <Bug :size="15" class="text-emerald-300/70 shrink-0" />
             <span class="text-[11px] font-bold uppercase tracking-widest text-white/40">Debug</span>
+            <span class="hidden sm:inline text-[10px] text-white/22 truncate">adapters, breakpoints, stack and variables</span>
             <span
               class="text-[10px] px-2 py-0.5 rounded-full border shrink-0"
               :class="running ? 'border-emerald-500/25 text-emerald-300/70 bg-emerald-500/8' : 'border-white/8 text-white/25 bg-white/4'"
@@ -357,7 +383,7 @@ onUnmounted(() => {
           </button>
         </div>
 
-        <div class="flex-1 grid grid-cols-[310px_minmax(0,1fr)] min-h-0">
+        <div class="flex-1 grid grid-cols-[360px_minmax(0,1fr)] min-h-0">
           <aside class="border-r border-white/6 p-3 flex flex-col gap-3 overflow-y-auto" style="scrollbar-width:thin; scrollbar-color: rgba(255,255,255,0.07) transparent">
             <div class="flex items-center justify-between gap-2">
               <span class="text-[10px] font-bold uppercase tracking-wide text-white/28">Adapter</span>
@@ -379,6 +405,37 @@ onUnmounted(() => {
                 {{ adapter.label }}{{ adapter.available ? '' : ' (missing)' }}
               </option>
             </select>
+
+            <div class="rounded-xl border border-emerald-300/10 bg-emerald-400/5 p-3">
+              <div class="flex items-center justify-between gap-2 mb-2">
+                <span class="text-[10px] font-bold uppercase tracking-wide text-emerald-200/55">Debug flow</span>
+                <span class="rounded-full bg-black/24 px-2 py-0.5 text-[10px] text-white/35">{{ debugStepLabel }}</span>
+              </div>
+              <div class="grid grid-cols-4 gap-1">
+                <div class="rounded bg-black/20 px-2 py-1">
+                  <div class="text-[9px] text-white/25 uppercase">1</div>
+                  <div class="text-[10px] text-white/52 truncate">adapter</div>
+                </div>
+                <div class="rounded bg-black/20 px-2 py-1">
+                  <div class="text-[9px] text-white/25 uppercase">2</div>
+                  <div class="text-[10px] text-white/52 truncate">target</div>
+                </div>
+                <div class="rounded bg-black/20 px-2 py-1">
+                  <div class="text-[9px] text-white/25 uppercase">3</div>
+                  <div class="text-[10px] text-white/52 truncate">breakpoints</div>
+                </div>
+                <div class="rounded bg-black/20 px-2 py-1">
+                  <div class="text-[9px] text-white/25 uppercase">4</div>
+                  <div class="text-[10px] text-white/52 truncate">inspect</div>
+                </div>
+              </div>
+              <div class="mt-2 flex flex-wrap gap-1 text-[9px] text-white/24">
+                <span class="rounded bg-white/5 px-1.5 py-0.5">F5 run/continue</span>
+                <span class="rounded bg-white/5 px-1.5 py-0.5">F10 over</span>
+                <span class="rounded bg-white/5 px-1.5 py-0.5">F11 in</span>
+                <span class="rounded bg-white/5 px-1.5 py-0.5">Shift+F5 stop</span>
+              </div>
+            </div>
 
             <div class="grid grid-cols-[1fr_92px] gap-2">
               <input

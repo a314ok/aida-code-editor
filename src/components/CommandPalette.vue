@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { Search } from 'lucide-vue-next';
 import { useEditorStore } from '../stores/editor';
 import { getExtensionCommands, runExtensionCommand } from '../lib/extensions';
-import { isCode, isPrimaryKey } from '../lib/shortcuts';
+import { isCode, matchesShortcut } from '../lib/shortcuts';
 
 const store = useEditorStore();
 const isVisible = ref(false);
@@ -11,15 +11,19 @@ const searchQuery = ref('');
 const selectedIndex = ref(0);
 const extensionVersion = ref(0);
 
-const emit = defineEmits(['openSettings', 'openSearch', 'openProblems', 'openTasks', 'openDebug']);
+const emit = defineEmits(['openSettings', 'openSearch', 'openProblems', 'openTasks', 'openDebug', 'openApi', 'openBrowser', 'openVisual']);
 
-const coreCommands = [
+const coreCommandDefaults = [
+  { id: 'command-palette', label: 'View: Command Palette',        shortcut: 'Ctrl+P' },
   { id: 'toggle-terminal', label: 'View: Toggle Terminal',      shortcut: 'Ctrl+J' },
   { id: 'open-settings',   label: 'Preferences: Open Settings', shortcut: 'Ctrl+,' },
   { id: 'open-search',     label: 'Search: Find in Files',      shortcut: 'Ctrl+Shift+F' },
   { id: 'open-problems',   label: 'View: Problems',             shortcut: 'Ctrl+Shift+M' },
   { id: 'open-tasks',      label: 'Tasks: Run Task',             shortcut: 'Ctrl+Shift+B' },
   { id: 'open-debug',      label: 'Debug: Open Debugger',        shortcut: 'Ctrl+Shift+D' },
+  { id: 'open-browser',    label: 'Browser: New Floating Window', shortcut: 'Ctrl+Shift+G' },
+  { id: 'open-api',        label: 'API: Open Client',             shortcut: 'Ctrl+Shift+A' },
+  { id: 'open-visual',     label: 'Frontend: Open Visual Builder', shortcut: 'Ctrl+Shift+V' },
   { id: 'save-file',       label: 'File: Save',                 shortcut: 'Ctrl+S' },
   { id: 'lsp-hover',       label: 'LSP: Hover',                 shortcut: '' },
   { id: 'lsp-definition',  label: 'LSP: Go to Definition',      shortcut: 'F12' },
@@ -31,8 +35,14 @@ const coreCommands = [
   { id: 'word-wrap',       label: 'Editor: Toggle Word Wrap',   shortcut: 'Alt+Z' },
 ];
 
+const shortcutFor = (id: string, fallback = '') => store.settings.keybindings[id] ?? fallback;
+const coreCommands = computed(() => coreCommandDefaults.map(command => ({
+  ...command,
+  shortcut: shortcutFor(command.id, command.shortcut),
+})));
+
 const allCommands = computed(() => [
-  ...coreCommands,
+  ...coreCommands.value,
   ...getExtensionCommands().map(command => ({
     id: command.id,
     label: command.title,
@@ -50,12 +60,16 @@ const filtered = computed(() => {
 
 const executeCommand = (id: string) => {
   switch (id) {
+    case 'command-palette': isVisible.value = true; break;
     case 'toggle-terminal': store.toggleTerminal(); break;
     case 'open-settings':   emit('openSettings'); break;
     case 'open-search':     emit('openSearch'); break;
     case 'open-problems':   emit('openProblems'); break;
     case 'open-tasks':      emit('openTasks'); break;
     case 'open-debug':      emit('openDebug'); break;
+    case 'open-browser':    emit('openBrowser'); break;
+    case 'open-api':        emit('openApi'); break;
+    case 'open-visual':     emit('openVisual'); break;
     case 'save-file':       window.dispatchEvent(new CustomEvent('aida:save-active-file')); break;
     case 'lsp-hover':       window.dispatchEvent(new CustomEvent('aida:lsp-action', { detail: { action: 'hover' } })); break;
     case 'lsp-definition':  window.dispatchEvent(new CustomEvent('aida:lsp-action', { detail: { action: 'definition' } })); break;
@@ -75,34 +89,49 @@ const executeCommand = (id: string) => {
 const refreshExtensions = () => { extensionVersion.value++; };
 
 const handleKeydown = (e: KeyboardEvent) => {
-  if (isPrimaryKey(e, 'KeyP')) {
+  if (matchesShortcut(e, shortcutFor('command-palette', 'Ctrl+P'))) {
     e.preventDefault();
     isVisible.value = !isVisible.value;
     if (isVisible.value) searchQuery.value = '';
   }
-  if (isPrimaryKey(e, 'Comma')) {
+  if (matchesShortcut(e, shortcutFor('open-settings', 'Ctrl+,'))) {
     e.preventDefault();
     emit('openSettings');
   }
-  if (isPrimaryKey(e, 'KeyF', { shift: true })) {
+  if (matchesShortcut(e, shortcutFor('open-search', 'Ctrl+Shift+F'))) {
     e.preventDefault();
     isVisible.value = false;
     emit('openSearch');
   }
-  if (isPrimaryKey(e, 'KeyM', { shift: true })) {
+  if (matchesShortcut(e, shortcutFor('open-problems', 'Ctrl+Shift+M'))) {
     e.preventDefault();
     isVisible.value = false;
     emit('openProblems');
   }
-  if (isPrimaryKey(e, 'KeyB', { shift: true })) {
+  if (matchesShortcut(e, shortcutFor('open-tasks', 'Ctrl+Shift+B'))) {
     e.preventDefault();
     isVisible.value = false;
     emit('openTasks');
   }
-  if (isPrimaryKey(e, 'KeyD', { shift: true })) {
+  if (matchesShortcut(e, shortcutFor('open-debug', 'Ctrl+Shift+D'))) {
     e.preventDefault();
     isVisible.value = false;
     emit('openDebug');
+  }
+  if (matchesShortcut(e, shortcutFor('open-browser', 'Ctrl+Shift+G'))) {
+    e.preventDefault();
+    isVisible.value = false;
+    emit('openBrowser');
+  }
+  if (matchesShortcut(e, shortcutFor('open-api', 'Ctrl+Shift+A'))) {
+    e.preventDefault();
+    isVisible.value = false;
+    emit('openApi');
+  }
+  if (matchesShortcut(e, shortcutFor('open-visual', 'Ctrl+Shift+V'))) {
+    e.preventDefault();
+    isVisible.value = false;
+    emit('openVisual');
   }
 
   if (!isVisible.value) return;

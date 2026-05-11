@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
-import { useEditorStore, type FileEntry } from '../stores/editor';
+import { useEditorStore, type FileEntry, type GitFileStatus } from '../stores/editor';
 import {
   Search, X, FolderOpen, FilePlus, FolderPlus, RefreshCw,
   Files, GitBranch, ChevronRight
@@ -57,9 +57,10 @@ const projectName = (path: string) => path.replace(/\\/g, '/').split('/').filter
 const loadGitStatus = async () => {
   if (!store.currentProject) return;
   try {
-    const statuses = await invoke<any[]>('get_git_status', { path: store.currentProject });
+    const statuses = await invoke<GitFileStatus[]>('get_git_status', { path: store.currentProject });
     const m: Record<string, string> = {};
     statuses.forEach(s => { m[s.path] = s.status; });
+    store.gitStatusEntries = statuses;
     store.gitStatuses = m;
     const branch = await invoke<any>('get_git_branch', { path: store.currentProject });
     store.gitBranch = branch.name;
@@ -167,7 +168,7 @@ watch(() => props.initialTab, tab => {
     <!-- Panel -->
     <div
       class="flex flex-col bg-[#0e0e14] border border-white/9 rounded-2xl shadow-[0_24px_56px_rgba(0,0,0,0.78)] overflow-hidden transition-[width,height] duration-150"
-      :class="activeTab === 'git' ? 'w-[1120px] max-w-[calc(100vw-32px)] h-[82vh]' : 'w-[540px]'"
+      :class="activeTab === 'git' ? 'w-[1320px] max-w-[calc(100vw-28px)] h-[86vh]' : 'w-[540px]'"
       :style="activeTab === 'git' ? {} : { maxHeight: '72vh' }"
     >
 

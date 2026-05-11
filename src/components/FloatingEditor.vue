@@ -41,8 +41,8 @@ import {
 } from '../lib/lsp';
 import { useFloating } from '../composables/useFloating';
 import { tabDrag } from '../composables/useTabDrag';
-import { isAltKey, isCode, isPrimaryKey } from '../lib/shortcuts';
-import { AlignLeft, Info, Lightbulb, ListTree, LocateFixed, Loader2, Pencil, X } from 'lucide-vue-next';
+import { isAltKey, matchesShortcut } from '../lib/shortcuts';
+import { AlignLeft, BookOpen, Info, Lightbulb, ListTree, LocateFixed, Loader2, Maximize2, Minimize2, MonitorPlay, Pencil, X } from 'lucide-vue-next';
 
 /* ── props ──────────────────────────────────────── */
 const props = defineProps<{ windowId: string }>();
@@ -59,7 +59,7 @@ const activeTabPath = computed({
 const activeTab = computed(() => tabs.value.find(t => t.path === activeTabPath.value) ?? null);
 
 /* ── floating window ────────────────────────────── */
-const { pos, dragging, resizing, startDrag, startResize, initFromCanvas, bringToFront } =
+const { pos, dragging, resizing, maximized, startDrag, startResize, initFromCanvas, bringToFront, toggleMaximize } =
   useFloating({ x: 8, y: 8, w: 800, h: 500 });
 
 const panelStyle = computed(() => ({
@@ -68,7 +68,7 @@ const panelStyle = computed(() => ({
   width: `${pos.w}px`,
   height: `${pos.h}px`,
   zIndex: pos.z,
-  backgroundColor: store.settings.panelColor,
+  backgroundColor: `${store.settings.panelColor}/10`,
 }));
 
 const applyWindowPos = (nextPos: { x: number; y: number; w: number; h: number }) => {
@@ -76,6 +76,142 @@ const applyWindowPos = (nextPos: { x: number; y: number; w: number; h: number })
   pos.y = nextPos.y;
   pos.w = nextPos.w;
   pos.h = nextPos.h;
+};
+
+const persistWindowPos = () => {
+  if (win.value) win.value.savedPos = { x: pos.x, y: pos.y, w: pos.w, h: pos.h };
+};
+
+const toggleWindowMaximize = () => {
+  toggleMaximize();
+  persistWindowPos();
+  requestAnimationFrame(() => view?.requestMeasure());
+};
+
+const canPreviewHtml = computed(() => {
+  const name = activeTab.value?.name.toLowerCase() ?? '';
+  return name.endsWith('.html') || name.endsWith('.htm');
+});
+const canPreviewMarkdown = computed(() => {
+  const name = activeTab.value?.name.toLowerCase() ?? '';
+  return name.endsWith('.md') || name.endsWith('.mdx');
+});
+
+const escapeHtml = (value: string) => value
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;');
+
+const renderInlineMarkdown = (value: string) => escapeHtml(value)
+  .replace(/`([^`]+)`/g, '<code>$1</code>')
+  .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+  .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+  .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2">$1</a>');
+
+const renderMarkdownPreview = (source: string, title: string) => {
+  const lines = source.replace(/\r\n/g, '\n').split('\n');
+  const html: string[] = [];
+  let inCode = false;
+  let code: string[] = [];
+  let inList = false;
+  const closeList = () => {
+    if (inList) {
+      html.push('</ul>');
+      inList = false;
+    }
+  };
+
+  for (const line of lines) {
+    if (line.trim().startsWith('```')) {
+      if (inCode) {
+        html.push(`<pre><code>${escapeHtml(code.join('\n'))}</code></pre>`);
+        code = [];
+        inCode = false;
+      } else {
+        closeList();
+        inCode = true;
+      }
+      continue;
+    }
+    if (inCode) {
+      code.push(line);
+      continue;
+    }
+    if (!line.trim()) {
+      closeList();
+      continue;
+    }
+    const heading = line.match(/^(#{1,6})\s+(.+)$/);
+    if (heading) {
+      closeList();
+      const level = heading[1].length;
+      html.push(`<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`);
+      continue;
+    }
+    const listItem = line.match(/^\s*[-*]\s+(.+)$/);
+    if (listItem) {
+      if (!inList) {
+        html.push('<ul>');
+        inList = true;
+      }
+      html.push(`<li>${renderInlineMarkdown(listItem[1])}</li>`);
+      continue;
+    }
+    const quote = line.match(/^\s*>\s?(.+)$/);
+    if (quote) {
+      closeList();
+      html.push(`<blockquote>${renderInlineMarkdown(quote[1])}</blockquote>`);
+      continue;
+    }
+    closeList();
+    html.push(`<p>${renderInlineMarkdown(line)}</p>`);
+  }
+  closeList();
+
+  return `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>${escapeHtml(title)}</title>
+<style>
+  :root { color-scheme: dark; font-family: Inter, Segoe UI, sans-serif; background:#111116; color:#e7e7ea; }
+  body { margin:0; padding:32px; line-height:1.65; }
+  main { max-width:820px; margin:0 auto; }
+  h1,h2,h3,h4,h5,h6 { line-height:1.2; margin:1.4em 0 .55em; color:#fff; }
+  h1 { font-size:2rem; border-bottom:1px solid rgba(255,255,255,.12); padding-bottom:.35em; }
+  p,li,blockquote { color:rgba(255,255,255,.76); }
+  a { color:#5ee0b5; }
+  code { background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.08); border-radius:5px; padding:.12em .35em; }
+  pre { overflow:auto; padding:16px; border-radius:8px; background:#08080b; border:1px solid rgba(255,255,255,.08); }
+  pre code { padding:0; border:0; background:transparent; }
+  blockquote { margin:1em 0; padding:.2em 1em; border-left:3px solid #5ee0b5; background:rgba(94,224,181,.07); }
+</style>
+</head>
+<body><main>${html.join('\n')}</main></body>
+</html>`;
+};
+
+const previewActiveHtml = () => {
+  const tab = activeTab.value;
+  if (!tab) return;
+  const content = view?.state.doc.toString() ?? tab.content;
+  store.openBrowserWindow({
+    title: `Preview: ${tab.name}`,
+    url: `aida-preview://${tab.name}`,
+    srcdoc: content,
+  });
+};
+
+const previewActiveMarkdown = () => {
+  const tab = activeTab.value;
+  if (!tab) return;
+  const content = view?.state.doc.toString() ?? tab.content;
+  store.openBrowserWindow({
+    title: `Preview: ${tab.name}`,
+    url: `aida-markdown://${tab.name}`,
+    srcdoc: renderMarkdownPreview(content, tab.name),
+  });
 };
 
 /* ── editor ─────────────────────────────────────── */
@@ -553,18 +689,19 @@ const refreshActiveFileFromDisk = async () => {
 
 const handleKeys = (e: KeyboardEvent) => {
   if (store.activeWindowId !== props.windowId) return;
-  if (isPrimaryKey(e, 'Tab') || isPrimaryKey(e, 'Tab', { shift: true })) {
+  const previousFileShortcut = matchesShortcut(e, store.settings.keybindings['prev-file'] ?? 'Ctrl+Shift+Tab');
+  if (matchesShortcut(e, store.settings.keybindings['next-file'] ?? 'Ctrl+Tab') || previousFileShortcut) {
     e.preventDefault();
     e.stopPropagation();
-    store.switchTab(props.windowId, e.shiftKey ? -1 : 1);
+    store.switchTab(props.windowId, previousFileShortcut ? -1 : 1);
   }
-  if (isPrimaryKey(e, 'KeyJ')) { e.preventDefault(); store.toggleTerminal(); }
-  if (isPrimaryKey(e, 'KeyS')) { e.preventDefault(); saveFile(); }
-  if (isCode(e, 'F12') && !e.shiftKey) { e.preventDefault(); runLspAction('definition'); }
-  if (isCode(e, 'F12') && e.shiftKey) { e.preventDefault(); runLspAction('references'); }
-  if (isCode(e, 'F2')) { e.preventDefault(); runLspAction('rename'); }
-  if (isPrimaryKey(e, 'Period')) { e.preventDefault(); runLspAction('actions'); }
-  if (isAltKey(e, 'KeyF', { shift: true })) { e.preventDefault(); runLspAction('format'); }
+  if (matchesShortcut(e, store.settings.keybindings['toggle-terminal'] ?? 'Ctrl+J')) { e.preventDefault(); store.toggleTerminal(); }
+  if (matchesShortcut(e, store.settings.keybindings['save-file'] ?? 'Ctrl+S')) { e.preventDefault(); saveFile(); }
+  if (matchesShortcut(e, store.settings.keybindings['lsp-definition'] ?? 'F12')) { e.preventDefault(); runLspAction('definition'); }
+  if (matchesShortcut(e, store.settings.keybindings['lsp-references'] ?? 'Shift+F12')) { e.preventDefault(); runLspAction('references'); }
+  if (matchesShortcut(e, store.settings.keybindings['lsp-rename'] ?? 'F2')) { e.preventDefault(); runLspAction('rename'); }
+  if (matchesShortcut(e, store.settings.keybindings['lsp-actions'] ?? 'Ctrl+.')) { e.preventDefault(); runLspAction('actions'); }
+  if (matchesShortcut(e, store.settings.keybindings['lsp-format'] ?? 'Shift+Alt+F')) { e.preventDefault(); runLspAction('format'); }
   if (isAltKey(e, 'KeyZ')) {
     e.preventDefault();
     store.settings.wordWrap = !store.settings.wordWrap;
@@ -579,6 +716,24 @@ const handleLspActionEvent = (event: Event) => {
   if (store.activeWindowId !== props.windowId) return;
   const action = (event as CustomEvent<{ action: Parameters<typeof runLspAction>[0] }>).detail?.action;
   if (action) runLspAction(action);
+};
+
+const handleExternalContentUpdate = (event: Event) => {
+  const detail = (event as CustomEvent<{ path: string; content: string }>).detail;
+  if (!detail || detail.path !== activeTabPath.value || !view) return;
+  view.dispatch({
+    changes: {
+      from: 0,
+      to: view.state.doc.length,
+      insert: detail.content,
+    },
+  });
+  const tab = activeTab.value;
+  if (tab) {
+    tab.content = detail.content;
+    tab.isDirty = true;
+    lspClient.didChange(tab.path, tab.content);
+  }
 };
 
 /* ── drag-and-drop ──────────────────────────────── */
@@ -630,6 +785,7 @@ onMounted(async () => {
   window.addEventListener('keydown', handleKeys);
   window.addEventListener('aida:save-active-file', handleGlobalSave);
   window.addEventListener('aida:lsp-action', handleLspActionEvent);
+  window.addEventListener('aida:tab-content-updated', handleExternalContentUpdate);
   window.addEventListener('focus', refreshActiveFileFromDisk);
   filePoll = window.setInterval(refreshActiveFileFromDisk, 5000);
 
@@ -705,6 +861,7 @@ onUnmounted(() => {
   window.removeEventListener('keydown', handleKeys);
   window.removeEventListener('aida:save-active-file', handleGlobalSave);
   window.removeEventListener('aida:lsp-action', handleLspActionEvent);
+  window.removeEventListener('aida:tab-content-updated', handleExternalContentUpdate);
   window.removeEventListener('focus', refreshActiveFileFromDisk);
   if (filePoll !== null) window.clearInterval(filePoll);
   ro?.disconnect();
@@ -716,13 +873,13 @@ onUnmounted(() => {
   <!-- Floating editor panel -->
   <div
     data-floating-window
-    class="absolute flex flex-col rounded-xl border bg-[#111116] shadow-[0_8px_40px_rgba(0,0,0,0.6)] overflow-hidden transition-[border-color] duration-150"
+    class="absolute flex flex-col rounded-xl border shadow-[0_8px_40px_rgba(0,0,0,0.6)] overflow-hidden transition-[border-color] duration-150"
     :class="[
       dropTarget ? 'border-blue-500/60' : 'border-white/8',
       dragging || resizing ? 'select-none' : '',
     ]"
     :style="panelStyle"
-    @mousedown.capture="bringToFront(); store.activeWindowId = windowId"
+    @mousedown.capture="bringToFront(); store.activeWindowId = windowId; store.activeBrowserWindowId = null"
     @dragover="onPanelDragOver"
     @dragleave="onPanelDragLeave"
     @drop="onPanelDrop"
@@ -740,7 +897,7 @@ onUnmounted(() => {
 
     <!-- Tab bar — drag handle -->
     <div
-      class="h-10 flex items-stretch bg-[#0d0d10] border-b border-white/6 overflow-x-auto shrink-0 cursor-move"
+      class="h-10 flex items-stretch bg-[rgba(13,13,19,0.6)] border-b border-white/6 overflow-x-auto shrink-0 cursor-move"
       style="scrollbar-width:none"
       @mousedown="startDrag"
     >
@@ -748,7 +905,7 @@ onUnmounted(() => {
       <div
         v-for="tab in tabs"
         :key="tab.path"
-        class="tab-item group flex items-center gap-2 px-4 border-r border-white/5 cursor-pointer transition-all shrink-0 relative"
+        class="tab-item group flex items-center gap-2 px-4 rounded-lg border-r border-white/5 cursor-pointer transition-all shrink-0 relative"
         :class="activeTabPath === tab.path
           ? 'bg-[#111116] text-white'
           : 'text-white/35 hover:text-white/60 hover:bg-white/3'"
@@ -787,13 +944,39 @@ onUnmounted(() => {
       <div class="ml-auto flex items-center gap-3 px-4 text-[11px] text-white/30 shrink-0" @mousedown.stop>
         <div v-if="activeTabPath" class="flex items-center gap-1 border-r border-white/7 pr-3">
           <button
+            v-if="canPreviewHtml"
+            @click="previewActiveHtml"
+            class="p-1 rounded text-white/25 hover:text-emerald-300 hover:bg-white/6 transition-colors"
+            title="Preview HTML in browser window"
+          >
+            <MonitorPlay :size="16" />
+          </button>
+          <button
+            v-if="canPreviewMarkdown"
+            @click="previewActiveMarkdown"
+            class="p-1 rounded text-white/25 hover:text-sky-300 hover:bg-white/6 transition-colors"
+            title="Preview Markdown"
+          >
+            <BookOpen :size="16" />
+          </button>
+          <button
+            @click="toggleWindowMaximize"
+            class="p-1 rounded text-white/25 hover:text-white/70 hover:bg-white/6 transition-colors"
+            title="Maximize window"
+          >
+            <Minimize2 v-if="maximized" :size="16" />
+            <Maximize2 v-else :size="16" />
+          </button>
+        </div>
+        <div v-if="activeTabPath" class="flex items-center gap-1 border-r border-white/7 pr-3">
+          <button
             @click="runLspAction('hover')"
             class="p-1 rounded text-white/25 hover:text-sky-300 hover:bg-white/6 transition-colors disabled:opacity-30"
             :disabled="!!lspBusy"
             title="Hover"
           >
-            <Loader2 v-if="lspBusy === 'hover'" :size="12" class="animate-spin" />
-            <Info v-else :size="12" />
+            <Loader2 v-if="lspBusy === 'hover'" :size="16" class="animate-spin" />
+            <Info v-else :size="16" />
           </button>
           <button
             @click="runLspAction('definition')"
@@ -801,7 +984,7 @@ onUnmounted(() => {
             :disabled="!!lspBusy"
             title="Go to Definition (F12)"
           >
-            <LocateFixed :size="12" />
+            <LocateFixed :size="16" />
           </button>
           <button
             @click="runLspAction('references')"
@@ -809,7 +992,7 @@ onUnmounted(() => {
             :disabled="!!lspBusy"
             title="References (Shift+F12)"
           >
-            <ListTree :size="12" />
+            <ListTree :size="16" />
           </button>
           <button
             @click="runLspAction('rename')"
@@ -817,7 +1000,7 @@ onUnmounted(() => {
             :disabled="!!lspBusy"
             title="Rename Symbol (F2)"
           >
-            <Pencil :size="12" />
+            <Pencil :size="16" />
           </button>
           <button
             @click="runLspAction('actions')"
@@ -825,7 +1008,7 @@ onUnmounted(() => {
             :disabled="!!lspBusy"
             title="Code Actions (Ctrl+.)"
           >
-            <Lightbulb :size="12" />
+            <Lightbulb :size="16" />
           </button>
           <button
             @click="runLspAction('format')"
@@ -833,7 +1016,7 @@ onUnmounted(() => {
             :disabled="!!lspBusy"
             title="Format Document (Shift+Alt+F)"
           >
-            <AlignLeft :size="12" />
+            <AlignLeft :size="16" />
           </button>
         </div>
         <span
@@ -935,7 +1118,7 @@ onUnmounted(() => {
     </div>
 
     <!-- Editor area -->
-    <div class="relative flex-1 bg-[#0e0e11]" style="min-height:0">
+    <div class="relative flex-1 bg-[rgb(14,14,17)]/10 backdrop-blur-lg border border-white/20 rounded-lg shadow-lg" style="min-height:0">
       <div ref="editorWrap" class="absolute inset-0"></div>
     </div>
 

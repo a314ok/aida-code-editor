@@ -56,9 +56,14 @@ pub fn start_dap<R: Runtime>(
     }
     *state.stdin.lock().unwrap() = None;
 
-    let mut command = Command::new(&cmd);
+    let display_command = std::iter::once(cmd.clone())
+        .chain(args.iter().cloned())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let (spawn_cmd, spawn_args) = normalize_spawn_command(cmd, args);
+    let mut command = Command::new(&spawn_cmd);
     command
-        .args(&args)
+        .args(&spawn_args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -68,7 +73,7 @@ pub fn start_dap<R: Runtime>(
 
     let mut child = command
         .spawn()
-        .map_err(|e| format!("Failed to start DAP adapter '{}': {}", cmd, e))?;
+        .map_err(|e| format!("Failed to start DAP adapter '{}': {}", display_command, e))?;
 
     let stdout = child.stdout.take().ok_or("Failed to open DAP stdout")?;
     let stderr = child.stderr.take();
@@ -315,4 +320,27 @@ fn command_variants(cmd: &str) -> Vec<String> {
     }
 
     vec![cmd.to_string()]
+}
+
+fn normalize_spawn_command(cmd: String, args: Vec<String>) -> (String, Vec<String>) {
+    let ext = Path::new(&cmd)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    if matches!(ext.as_str(), "js" | "mjs" | "cjs") {
+        let mut next_args = vec![cmd];
+        next_args.extend(args);
+        return ("node".to_string(), next_args);
+    }
+
+    if cfg!(windows) && matches!(ext.as_str(), "cmd" | "bat") {
+        let shell = env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string());
+        let mut next_args = vec!["/C".to_string(), cmd];
+        next_args.extend(args);
+        return (shell, next_args);
+    }
+
+    (cmd, args)
 }

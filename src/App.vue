@@ -4,6 +4,9 @@ import type { CSSProperties } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import AppBar from './components/AppBar.vue';
 import FloatingEditor from './components/FloatingEditor.vue';
+import FloatingBrowser from './components/FloatingBrowser.vue';
+import FloatingApiClient from './components/FloatingApiClient.vue';
+import FloatingVisualBuilder from './components/FloatingVisualBuilder.vue';
 import FloatingTerminal from './components/FloatingTerminal.vue';
 import FloatingMenu from './components/FloatingMenu.vue';
 import CommandPalette from './components/CommandPalette.vue';
@@ -13,7 +16,7 @@ import ProblemsPanel from './components/ProblemsPanel.vue';
 import TasksPanel from './components/TasksPanel.vue';
 import DebugPanel from './components/DebugPanel.vue';
 import { useEditorStore, type ActiveLspStatus, type EditorDiagnostic, type FileEntry } from './stores/editor';
-import { isCode, isPrimaryKey } from './lib/shortcuts';
+import { isCode, isPrimaryKey, matchesShortcut } from './lib/shortcuts';
 
 const store = useEditorStore();
 const showSettings = ref(false);
@@ -22,6 +25,8 @@ const showSearch = ref(false);
 const showProblems = ref(false);
 const showTasks = ref(false);
 const showDebug = ref(false);
+const showApiClient = ref(false);
+const showVisualBuilder = ref(false);
 const menuInitialTab = ref<'files' | 'git'>('files');
 const menuKey = ref(0);
 const canvasRef = ref<HTMLDivElement | null>(null);
@@ -46,12 +51,15 @@ const blockBrowserShortcuts = (e: KeyboardEvent) => {
   // Prevent page refresh (F5 has no editor use)
   if (isCode(e, 'F5')) { e.preventDefault(); return; }
   // Ctrl+P: prevent WebView print dialog — our command palette uses this
-  if (isPrimaryKey(e, 'KeyP')) e.preventDefault();
-  if (isPrimaryKey(e, 'KeyD', { shift: true })) e.preventDefault();
+  if (matchesShortcut(e, store.settings.keybindings['command-palette'] ?? 'Ctrl+P')) e.preventDefault();
+  if (matchesShortcut(e, store.settings.keybindings['open-debug'] ?? 'Ctrl+Shift+D')) e.preventDefault();
+  if (matchesShortcut(e, store.settings.keybindings['open-api'] ?? 'Ctrl+Shift+A')) e.preventDefault();
+  if (matchesShortcut(e, store.settings.keybindings['open-browser'] ?? 'Ctrl+Shift+G')) e.preventDefault();
+  if (matchesShortcut(e, store.settings.keybindings['open-visual'] ?? 'Ctrl+Shift+V')) e.preventDefault();
   if (isPrimaryKey(e, 'Tab') || isPrimaryKey(e, 'Tab', { shift: true })) e.preventDefault();
 };
 
-const windowBounds = (win: (typeof store.editorWindows)[number]) => {
+const windowBounds = (win: { savedPos?: { x: number; y: number; w: number; h: number }; initPos?: { x: number; y: number; w: number; h: number } }) => {
   const pos = win.savedPos ?? win.initPos ?? { x: 8, y: 8, w: 800, h: 500 };
   return { left: pos.x, top: pos.y, right: pos.x + pos.w, bottom: pos.y + pos.h };
 };
@@ -79,6 +87,14 @@ const scheduleViewportUpdate = () => {
 const visibleEditorWindows = computed(() => {
   const v = viewport.value;
   return store.editorWindows.filter(win => {
+    const b = windowBounds(win);
+    return b.right >= v.left && b.left <= v.right && b.bottom >= v.top && b.top <= v.bottom;
+  });
+});
+
+const visibleBrowserWindows = computed(() => {
+  const v = viewport.value;
+  return store.browserWindows.filter(win => {
     const b = windowBounds(win);
     return b.right >= v.left && b.left <= v.right && b.bottom >= v.top && b.top <= v.bottom;
   });
@@ -113,6 +129,21 @@ const centerWindow = async (windowId: string) => {
   const win = store.getWindow(windowId);
   if (!canvas || !win) return;
   store.activeWindowId = windowId;
+  const b = windowBounds(win);
+  canvas.scrollTo({
+    left: Math.max(0, b.left - canvas.clientWidth / 2 + (b.right - b.left) / 2),
+    top: Math.max(0, b.top - canvas.clientHeight / 2 + (b.bottom - b.top) / 2),
+    behavior: 'smooth',
+  });
+  await nextTick();
+  updateViewport();
+};
+
+const centerBrowserWindow = async (windowId: string) => {
+  const canvas = canvasRef.value;
+  const win = store.getBrowserWindow(windowId);
+  if (!canvas || !win) return;
+  store.activeBrowserWindowId = windowId;
   const b = windowBounds(win);
   canvas.scrollTo({
     left: Math.max(0, b.left - canvas.clientWidth / 2 + (b.right - b.left) / 2),
@@ -195,8 +226,15 @@ onMounted(async () => {
           activeTabPath: string | null;
           savedPos?: { x: number; y: number; w: number; h: number };
         }>;
+        browserWindows?: Array<{
+          id?: string;
+          tabs?: { id?: string; title: string; url: string; srcdoc?: string; mode?: 'embed' | 'native'; nativeWindowLabel?: string; nativeOpened?: boolean }[];
+          activeTabId?: string | null;
+          savedPos?: { x: number; y: number; w: number; h: number };
+        }>;
         terminalOpen?: boolean;
         activeWindowId?: string;
+        activeBrowserWindowId?: string | null;
         currentProject?: string | null;
         workspaceRoots?: string[];
       };
@@ -233,6 +271,28 @@ onMounted(async () => {
       if (session.activeWindowId && store.getWindow(session.activeWindowId)) {
         store.activeWindowId = session.activeWindowId;
       }
+      if (Array.isArray(session.browserWindows)) {
+        store.browserWindows = session.browserWindows
+          .filter(win => Array.isArray(win.tabs) && win.tabs.length)
+          .map((win, index) => ({
+            id: win.id ?? `b_s${index}`,
+            tabs: (win.tabs ?? []).map((tab, tabIndex) => ({
+              id: tab.id ?? `bt_s${index}_${tabIndex}`,
+              title: tab.title,
+              url: tab.url,
+              srcdoc: tab.srcdoc,
+              mode: tab.mode ?? 'embed',
+              nativeWindowLabel: tab.nativeWindowLabel,
+              nativeOpened: false,
+            })),
+            activeTabId: win.activeTabId ?? win.tabs?.[0]?.id ?? `bt_s${index}_0`,
+            initPos: win.savedPos,
+            savedPos: win.savedPos,
+          }));
+        if (session.activeBrowserWindowId && store.getBrowserWindow(session.activeBrowserWindowId)) {
+          store.activeBrowserWindowId = session.activeBrowserWindowId;
+        }
+      }
       if (Array.isArray(session.workspaceRoots)) {
         for (const root of session.workspaceRoots) store.addWorkspaceRoot(root);
       }
@@ -258,7 +318,11 @@ onUnmounted(() => {
       @toggle-menu="toggleMenu"
       @open-git="openGit"
       @open-debug="showDebug = true"
+      @open-browser="store.openBrowserWindow({ url: 'about:blank', title: 'Browser' })"
+      @open-api="showApiClient = true"
+      @open-visual="showVisualBuilder = true"
       @focus-window="centerWindow"
+      @focus-browser-window="centerBrowserWindow"
       @open-settings="showSettings = true"
     />
 
@@ -268,12 +332,16 @@ onUnmounted(() => {
       @open-problems="showProblems = true"
       @open-tasks="showTasks = true"
       @open-debug="showDebug = true"
+      @open-browser="store.openBrowserWindow({ url: 'about:blank', title: 'Browser' })"
+      @open-api="showApiClient = true"
+      @open-visual="showVisualBuilder = true"
     />
     <SettingsPanel v-if="showSettings" @close="showSettings = false" />
     <SearchPanel v-if="showSearch" @close="showSearch = false" />
     <ProblemsPanel v-if="showProblems" @close="showProblems = false" />
     <TasksPanel v-if="showTasks" @close="showTasks = false" />
     <DebugPanel v-if="showDebug" @close="showDebug = false" />
+    <FloatingApiClient v-if="showApiClient" @close="showApiClient = false" />
     <FloatingMenu v-if="showMenu" :key="menuKey" :initial-tab="menuInitialTab" @close="showMenu = false" />
 
     <!-- Floating window workspace — scrollable infinite canvas -->
@@ -292,6 +360,12 @@ onUnmounted(() => {
           :key="win.id"
           :window-id="win.id"
         />
+        <FloatingBrowser
+          v-for="win in visibleBrowserWindows"
+          :key="win.id"
+          :window-id="win.id"
+        />
+        <FloatingVisualBuilder v-if="showVisualBuilder" @close="showVisualBuilder = false" />
         <FloatingTerminal v-if="store.isBottomPanelVisible" />
       </div>
     </div>
