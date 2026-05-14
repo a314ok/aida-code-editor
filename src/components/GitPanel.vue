@@ -32,6 +32,8 @@ const graphItems = ref<GitGraphCommit[]>([]);
 const selectedGraphHash = ref('');
 const graphDiffContent = ref('');
 const graphDiffLoading = ref(false);
+const selectedFiles = ref<Set<string>>(new Set());
+const amendMode = ref(false);
 
 const emit = defineEmits(['refresh']);
 
@@ -593,6 +595,68 @@ const commitChanges = async () => {
   finally { loading.value = false; }
 };
 
+const toggleFileSelection = (path: string) => {
+  const next = new Set(selectedFiles.value);
+  if (next.has(path)) next.delete(path);
+  else next.add(path);
+  selectedFiles.value = next;
+};
+
+const toggleGroupSelection = (entries: GitListEntry[]) => {
+  const allSelected = entries.length > 0 && entries.every(e => selectedFiles.value.has(e.path));
+  const next = new Set(selectedFiles.value);
+  if (allSelected) {
+    entries.forEach(e => next.delete(e.path));
+  } else {
+    entries.forEach(e => next.add(e.path));
+  }
+  selectedFiles.value = next;
+};
+
+const stageSelected = async () => {
+  if (!store.currentProject || !selectedFiles.value.size) return;
+  loading.value = true;
+  try {
+    for (const file of selectedFiles.value) {
+      await invoke('git_stage_file', { path: store.currentProject, file });
+    }
+    flash(`Staged ${selectedFiles.value.size} file(s)`);
+    selectedFiles.value = new Set();
+    await refreshAll();
+  } catch (e: any) { flash(String(e), true); }
+  finally { loading.value = false; }
+};
+
+const unstageSelected = async () => {
+  if (!store.currentProject || !selectedFiles.value.size) return;
+  loading.value = true;
+  try {
+    for (const file of selectedFiles.value) {
+      await invoke('git_unstage_file', { path: store.currentProject, file });
+    }
+    flash(`Unstaged ${selectedFiles.value.size} file(s)`);
+    selectedFiles.value = new Set();
+    await refreshAll();
+  } catch (e: any) { flash(String(e), true); }
+  finally { loading.value = false; }
+};
+
+const amendCommit = async () => {
+  if (!store.currentProject) return;
+  loading.value = true;
+  try {
+    await invoke('git_amend_commit', {
+      path: store.currentProject,
+      message: commitMessage.value.trim() || null,
+    });
+    flash('Commit amended');
+    commitMessage.value = '';
+    amendMode.value = false;
+    await refreshAll();
+  } catch (e: any) { flash(String(e), true); }
+  finally { loading.value = false; }
+};
+
 const push = async () => {
   if (!store.currentProject) return;
   loading.value = true;
@@ -1028,33 +1092,69 @@ const statusClass: Record<string, string> = {
         </div>
         <textarea
           v-model="commitMessage"
-          @keydown.ctrl.enter.prevent="commitChanges"
-          placeholder="Повідомлення коміту (Ctrl+Enter)"
-          class="w-full bg-black/24 border border-white/9 rounded-xl px-3 py-2.5 text-[12px] text-white/78 placeholder:text-white/28 focus:outline-none focus:border-emerald-300/35 resize-none h-24 font-mono transition-colors"
+          @keydown.ctrl.enter.prevent="amendMode ? amendCommit() : commitChanges()"
+          :placeholder="amendMode ? 'Amend message (empty to keep current, Ctrl+Enter)' : 'Повідомлення коміту (Ctrl+Enter)'"
+          class="w-full bg-black/24 border rounded-xl px-3 py-2.5 text-[12px] text-white/78 placeholder:text-white/28 focus:outline-none resize-none h-24 font-mono transition-colors"
+          :class="amendMode ? 'border-amber-300/30 focus:border-amber-300/55' : 'border-white/9 focus:border-emerald-300/35'"
         ></textarea>
 
-        <div class="flex gap-2">
+        <label class="flex items-center gap-2 cursor-pointer select-none">
+          <input type="checkbox" v-model="amendMode" class="accent-amber-400 w-3.5 h-3.5" />
+          <span class="text-[11px] text-white/45">Amend last commit</span>
+        </label>
+
+        <div class="flex gap-2 flex-wrap">
           <button
             @click="stageAll"
             :disabled="loading || !canStageAll"
-            class="flex-1 bg-white/5 hover:bg-white/9 border border-white/9 text-white/64 py-2 px-3 rounded-lg text-[11px] flex items-center justify-center gap-1.5 transition-all disabled:opacity-30"
+            class="flex-1 min-w-[90px] bg-white/5 hover:bg-white/9 border border-white/9 text-white/64 py-2 px-3 rounded-lg text-[11px] flex items-center justify-center gap-1.5 transition-all disabled:opacity-30"
           >
             <Plus :size="12" />
             Stage All
           </button>
           <button
+            v-if="selectedFiles.size"
+            @click="stageSelected"
+            :disabled="loading"
+            class="flex-1 min-w-[90px] bg-emerald-500/12 hover:bg-emerald-500/18 border border-emerald-300/22 text-emerald-100/78 py-2 px-3 rounded-lg text-[11px] flex items-center justify-center gap-1.5 transition-all disabled:opacity-30"
+          >
+            <Plus :size="12" />
+            Stage Selected ({{ selectedFiles.size }})
+          </button>
+          <button
+            v-if="selectedFiles.size"
+            @click="unstageSelected"
+            :disabled="loading"
+            class="flex-1 min-w-[90px] bg-amber-500/12 hover:bg-amber-500/18 border border-amber-300/22 text-amber-100/78 py-2 px-3 rounded-lg text-[11px] flex items-center justify-center gap-1.5 transition-all disabled:opacity-30"
+          >
+            <Minus :size="12" />
+            Unstage Selected
+          </button>
+          <button
             @click="unstageAll"
             :disabled="loading || !canUnstageAll"
-            class="flex-1 bg-white/5 hover:bg-white/9 border border-white/9 text-white/64 py-2 px-3 rounded-lg text-[11px] flex items-center justify-center gap-1.5 transition-all disabled:opacity-30"
+            class="flex-1 min-w-[90px] bg-white/5 hover:bg-white/9 border border-white/9 text-white/64 py-2 px-3 rounded-lg text-[11px] flex items-center justify-center gap-1.5 transition-all disabled:opacity-30"
           >
             <Minus :size="12" />
             Unstage
           </button>
           <button
+            v-if="amendMode"
+            @click="amendCommit"
+            :disabled="loading"
+            title="Amend the last commit. Empty message keeps the existing one."
+            class="flex-1 min-w-[120px] bg-amber-300 text-black font-bold py-2 px-3 rounded-lg text-[11px] flex items-center justify-center gap-1.5 hover:bg-amber-200 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+          >
+            <Loader2 v-if="loading" :size="11" class="animate-spin" />
+            <GitCommit v-else :size="11" />
+            Amend Commit
+          </button>
+          <button
+            v-else
             @click="commitChanges"
             :disabled="!canCommit"
             :title="stagedEntries.length ? 'Commit staged files' : 'Stage at least one file first'"
-            class="flex-1 bg-emerald-300 text-black font-bold py-2 px-3 rounded-lg text-[11px] flex items-center justify-center gap-1.5 hover:bg-emerald-200 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+            class="flex-1 min-w-[120px] bg-emerald-300 text-black font-bold py-2 px-3 rounded-lg text-[11px] flex items-center justify-center gap-1.5 hover:bg-emerald-200 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
           >
             <Loader2 v-if="loading" :size="11" class="animate-spin" />
             <GitCommit v-else :size="11" />
@@ -1089,7 +1189,18 @@ const statusClass: Record<string, string> = {
         >
           <div v-for="group in changeGroups" :key="group.key" class="rounded-xl border border-white/7 bg-black/18 overflow-hidden">
             <div class="h-8 flex items-center justify-between px-3 border-b border-white/6 bg-white/[0.025]">
-              <span class="text-[10px] font-bold uppercase tracking-wide text-white/45">{{ group.title }}</span>
+              <label v-if="group.entries.length" class="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  class="accent-emerald-400 w-3 h-3"
+                  :checked="group.entries.every(e => selectedFiles.has(e.path))"
+                  :indeterminate.prop="group.entries.some(e => selectedFiles.has(e.path)) && !group.entries.every(e => selectedFiles.has(e.path))"
+                  @change.stop="toggleGroupSelection(group.entries)"
+                  @click.stop
+                />
+                <span class="text-[10px] font-bold uppercase tracking-wide text-white/45">{{ group.title }}</span>
+              </label>
+              <span v-else class="text-[10px] font-bold uppercase tracking-wide text-white/45">{{ group.title }}</span>
               <span class="rounded-full bg-white/7 px-2 py-0.5 text-[10px] text-white/42">{{ group.entries.length }}</span>
             </div>
             <div v-if="group.entries.length" class="py-1">
@@ -1100,6 +1211,13 @@ const statusClass: Record<string, string> = {
                 :class="selectedFile === entry.path && diffMode === (group.stagedDiff ? 'staged' : 'unstaged') ? 'bg-emerald-400/9 ring-1 ring-emerald-300/14' : ''"
                 @click="loadDiff(entry.path, group.stagedDiff)"
               >
+                <input
+                  type="checkbox"
+                  class="accent-emerald-400 w-3.5 h-3.5 shrink-0"
+                  :checked="selectedFiles.has(entry.path)"
+                  @change.stop="toggleFileSelection(entry.path)"
+                  @click.stop
+                />
                 <div class="min-w-0 flex-1">
                   <div class="text-[11px] text-white/72 truncate font-mono group-hover:text-white/90 transition-colors">
                     {{ entry.path.split(/[/\\]/).pop() }}

@@ -91,9 +91,6 @@ export interface BrowserTab {
   title: string;
   url: string;
   srcdoc?: string;
-  mode?: 'embed' | 'native';
-  nativeWindowLabel?: string;
-  nativeOpened?: boolean;
 }
 
 export interface BrowserWindowState {
@@ -123,6 +120,11 @@ export const DEFAULT_KEYBINDINGS: Record<string, string> = {
   'lsp-actions': 'Ctrl+.',
   'lsp-format': 'Shift+Alt+F',
   'toggle-terminal': 'Ctrl+J',
+  'new-file': 'Ctrl+N',
+  'toggle-sidebar': 'Ctrl+B',
+  'maximize-window': 'F11',
+  'preview-html': 'Ctrl+Shift+P',
+  'go-to-line': 'Ctrl+G',
 };
 
 export const useEditorStore = defineStore('editor', () => {
@@ -380,9 +382,6 @@ export const useEditorStore = defineStore('editor', () => {
       title: input.title ?? (input.srcdoc ? 'Preview' : url),
       url,
       srcdoc: input.srcdoc,
-      mode: input.mode ?? 'embed',
-      nativeWindowLabel: input.nativeWindowLabel,
-      nativeOpened: input.nativeOpened,
     };
   }
 

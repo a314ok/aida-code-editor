@@ -236,6 +236,10 @@ export class DapClient {
     return this.request('variables', { variablesReference });
   }
 
+  evaluate(expression: string, frameId?: number) {
+    return this.request('evaluate', { expression, frameId, context: 'watch' });
+  }
+
   continue(threadId: number) {
     return this.request('continue', { threadId });
   }

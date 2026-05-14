@@ -42,7 +42,7 @@ import {
 import { useFloating } from '../composables/useFloating';
 import { tabDrag } from '../composables/useTabDrag';
 import { isAltKey, matchesShortcut } from '../lib/shortcuts';
-import { AlignLeft, BookOpen, Info, Lightbulb, ListTree, LocateFixed, Loader2, Maximize2, Minimize2, MonitorPlay, Pencil, X } from 'lucide-vue-next';
+import { AlignLeft, BookOpen, ChevronRight, Hash, Info, Lightbulb, ListTree, LocateFixed, Loader2, Maximize2, Minimize2, MonitorPlay, Pencil, X } from 'lucide-vue-next';
 
 /* ── props ──────────────────────────────────────── */
 const props = defineProps<{ windowId: string }>();
@@ -96,6 +96,29 @@ const canPreviewMarkdown = computed(() => {
   const name = activeTab.value?.name.toLowerCase() ?? '';
   return name.endsWith('.md') || name.endsWith('.mdx');
 });
+
+const breadcrumbs = computed(() => {
+  if (!activeTabPath.value) return [];
+  return activeTabPath.value.replace(/\\/g, '/').split('/').filter(Boolean);
+});
+
+const goToLineOpen = ref(false);
+const goToLineValue = ref('');
+const goToLineInputEl = ref<HTMLInputElement | null>(null);
+const selectionInfo = ref('');
+const totalLines = ref(0);
+
+const openGoToLine = () => {
+  goToLineValue.value = String(store.cursorLine + 1);
+  goToLineOpen.value = true;
+  nextTick(() => { goToLineInputEl.value?.select(); });
+};
+
+const confirmGoToLine = () => {
+  const n = parseInt(goToLineValue.value, 10);
+  if (Number.isFinite(n) && n >= 1) revealLine(n);
+  goToLineOpen.value = false;
+};
 
 const escapeHtml = (value: string) => value
   .replace(/&/g, '&amp;')
@@ -340,8 +363,12 @@ const makeExtensions = (name: string) => {
           lspClient.didChange(activeTabPath.value, content);
         }
       }
-      if (u.selectionSet) {
-        const p = u.state.selection.main.head;
+      if (u.selectionSet || u.docChanged) {
+        const sel = u.state.selection.main;
+        const selLen = Math.abs(sel.to - sel.from);
+        selectionInfo.value = selLen > 0 ? `${selLen} sel` : '';
+        totalLines.value = u.state.doc.lines;
+        const p = sel.head;
         const line = u.state.doc.lineAt(p);
         store.cursorLine = line.number - 1;
         store.cursorChar = p - line.from;
@@ -702,6 +729,7 @@ const handleKeys = (e: KeyboardEvent) => {
   if (matchesShortcut(e, store.settings.keybindings['lsp-rename'] ?? 'F2')) { e.preventDefault(); runLspAction('rename'); }
   if (matchesShortcut(e, store.settings.keybindings['lsp-actions'] ?? 'Ctrl+.')) { e.preventDefault(); runLspAction('actions'); }
   if (matchesShortcut(e, store.settings.keybindings['lsp-format'] ?? 'Shift+Alt+F')) { e.preventDefault(); runLspAction('format'); }
+  if (matchesShortcut(e, store.settings.keybindings['go-to-line'] ?? 'Ctrl+G')) { e.preventDefault(); openGoToLine(); }
   if (isAltKey(e, 'KeyZ')) {
     e.preventDefault();
     store.settings.wordWrap = !store.settings.wordWrap;
@@ -710,6 +738,10 @@ const handleKeys = (e: KeyboardEvent) => {
 
 const handleGlobalSave = () => {
   if (store.activeWindowId === props.windowId) saveFile();
+};
+
+const handleMaximizeEvent = () => {
+  if (store.activeWindowId === props.windowId) toggleWindowMaximize();
 };
 
 const handleLspActionEvent = (event: Event) => {
@@ -786,6 +818,7 @@ onMounted(async () => {
   window.addEventListener('aida:save-active-file', handleGlobalSave);
   window.addEventListener('aida:lsp-action', handleLspActionEvent);
   window.addEventListener('aida:tab-content-updated', handleExternalContentUpdate);
+  window.addEventListener('aida:maximize-active-window', handleMaximizeEvent);
   window.addEventListener('focus', refreshActiveFileFromDisk);
   filePoll = window.setInterval(refreshActiveFileFromDisk, 5000);
 
@@ -862,6 +895,7 @@ onUnmounted(() => {
   window.removeEventListener('aida:save-active-file', handleGlobalSave);
   window.removeEventListener('aida:lsp-action', handleLspActionEvent);
   window.removeEventListener('aida:tab-content-updated', handleExternalContentUpdate);
+  window.removeEventListener('aida:maximize-active-window', handleMaximizeEvent);
   window.removeEventListener('focus', refreshActiveFileFromDisk);
   if (filePoll !== null) window.clearInterval(filePoll);
   ro?.disconnect();
@@ -1044,6 +1078,21 @@ onUnmounted(() => {
       </div>
     </div>
 
+    <!-- Breadcrumbs -->
+    <div
+      v-if="activeTabPath && breadcrumbs.length"
+      class="h-6 flex items-center gap-0.5 px-3 border-b border-white/4 bg-black/14 overflow-hidden shrink-0"
+      style="scrollbar-width:none"
+    >
+      <template v-for="(seg, i) in breadcrumbs" :key="i">
+        <span
+          class="text-[10px] whitespace-nowrap"
+          :class="i === breadcrumbs.length - 1 ? 'text-white/52 font-medium' : 'text-white/22 hover:text-white/45 cursor-default'"
+        >{{ seg }}</span>
+        <ChevronRight v-if="i < breadcrumbs.length - 1" :size="9" class="text-white/15 shrink-0" />
+      </template>
+    </div>
+
     <!-- LSP action popup -->
     <div
       v-if="lspPanel || lspMessage"
@@ -1120,6 +1169,31 @@ onUnmounted(() => {
     <!-- Editor area -->
     <div class="relative flex-1 bg-[rgb(14,14,17)]/10 backdrop-blur-lg border border-white/20 rounded-lg shadow-lg" style="min-height:0">
       <div ref="editorWrap" class="absolute inset-0"></div>
+
+      <!-- Go-to-line overlay -->
+      <div
+        v-if="goToLineOpen"
+        class="absolute inset-0 z-40 flex items-start justify-center pt-10"
+        @mousedown.self="goToLineOpen = false"
+      >
+        <div class="bg-[#16171c] border border-white/12 rounded-xl shadow-[0_16px_48px_rgba(0,0,0,0.8)] p-4 w-56" @mousedown.stop>
+          <div class="flex items-center gap-1.5 mb-2.5">
+            <Hash :size="11" class="text-white/35" />
+            <span class="text-[10px] font-bold uppercase tracking-widest text-white/35">Go to line</span>
+          </div>
+          <input
+            ref="goToLineInputEl"
+            v-model="goToLineValue"
+            type="number"
+            min="1"
+            :max="totalLines"
+            class="w-full bg-black/35 border border-white/10 rounded-lg px-3 py-1.5 text-[13px] text-white/80 outline-none focus:border-emerald-300/40"
+            @keydown.enter.prevent="confirmGoToLine"
+            @keydown.escape.prevent="goToLineOpen = false"
+          />
+          <div class="mt-1.5 text-[10px] text-white/22">of {{ totalLines }} lines</div>
+        </div>
+      </div>
     </div>
 
     <!-- Status strip -->
@@ -1130,6 +1204,10 @@ onUnmounted(() => {
         </span>
         <span>UTF-8</span>
         <span>{{ store.settings.tabSize }} spaces</span>
+        <span v-if="selectionInfo" class="text-sky-400/60">{{ selectionInfo }}</span>
+        <span v-if="activeTabPath && totalLines" class="hover:text-white/50 cursor-pointer" @click="openGoToLine" :title="'Ctrl+G — go to line'">
+          {{ totalLines }} lines
+        </span>
         <span
           v-if="store.activeLsp && store.activeLsp.path === activeTabPath"
           :class="store.activeLsp.available ? 'text-emerald-400/60' : 'text-rose-400/60'"

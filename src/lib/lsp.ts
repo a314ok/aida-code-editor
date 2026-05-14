@@ -269,7 +269,7 @@ export class LspClient {
       workspaceFolders: rootPath
         ? [{ uri: pathToUri(rootPath), name: rootPath.split(/[\\/]/).pop() ?? 'workspace' }]
         : null,
-    });
+    }, 12000);
     this.notify('initialized', {});
     return result;
   }
@@ -433,7 +433,7 @@ export class LspClient {
     });
   }
 
-  async request(method: string, params: any): Promise<any> {
+  async request(method: string, params: any, timeoutMs = 5000): Promise<any> {
     await this.ready;
     const id = this.id++;
     const message = JSON.stringify({
@@ -447,7 +447,7 @@ export class LspClient {
       const timer = window.setTimeout(() => {
         this.callbacks.delete(id);
         resolve(null);
-      }, 2000);
+      }, timeoutMs);
       this.callbacks.set(id, (res) => {
         window.clearTimeout(timer);
         resolve(res);

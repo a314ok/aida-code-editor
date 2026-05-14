@@ -672,6 +672,20 @@ pub fn git_pull(path: String) -> Result<String, String> {
     run_git(vec!["-C", path.as_str(), "pull"])
 }
 
+#[tauri::command]
+pub fn git_amend_commit(path: String, message: Option<String>) -> Result<(), String> {
+    let mut args = vec!["-C", path.as_str(), "commit", "--amend"];
+    if let Some(ref msg) = message {
+        if !msg.trim().is_empty() {
+            args.push("-m");
+            args.push(msg.as_str());
+            return run_git(args).map(|_| ());
+        }
+    }
+    args.push("--no-edit");
+    run_git(args).map(|_| ())
+}
+
 fn is_safe_repo_relative_path(file: &str) -> bool {
     let path = Path::new(file);
     !path.is_absolute()

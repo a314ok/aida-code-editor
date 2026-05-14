@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue';
-import { Clock3, Copy, Maximize2, Minimize2, Plus, Play, Trash2, X } from 'lucide-vue-next';
+import { invoke } from '@tauri-apps/api/core';
+import { BookMarked, Check, Clock3, Copy, FolderOpen, Maximize2, Minimize2, Plus, Play, Star, Trash2, X } from 'lucide-vue-next';
 import { useFloating } from '../composables/useFloating';
 import { useEditorStore } from '../stores/editor';
 import { isPrimaryKey } from '../lib/shortcuts';
@@ -57,6 +58,20 @@ const responseMode = ref<'body' | 'headers'>('body');
 const history = ref<ApiHistoryItem[]>([]);
 const urlInputRef = ref<HTMLInputElement | null>(null);
 let aborter: AbortController | null = null;
+
+type ApiCollection = {
+  id: string;
+  name: string;
+  requests: ApiHistoryItem[];
+};
+type SidebarTab = 'history' | 'collections';
+const sidebarTab = ref<SidebarTab>('history');
+const collections = ref<ApiCollection[]>([]);
+const showSaveDialog = ref(false);
+const saveCollectionId = ref('__new__');
+const saveRequestName = ref('');
+const saveInputEl = ref<HTMLInputElement | null>(null);
+const expandedCollections = ref<Set<string>>(new Set());
 
 const panelStyle = computed(() => ({
   left: `${pos.x}px`,
@@ -230,6 +245,90 @@ const clearHistory = () => {
   localStorage.removeItem('aida:api-history');
 };
 
+const methodColor = (m: string) => {
+  const map: Record<string, string> = {
+    GET: 'text-emerald-300', POST: 'text-sky-300', PUT: 'text-amber-300',
+    PATCH: 'text-violet-300', DELETE: 'text-rose-300', HEAD: 'text-slate-300', OPTIONS: 'text-slate-300',
+  };
+  return map[m] ?? 'text-white/50';
+};
+
+const formatTimeAgo = (ts: number) => {
+  const s = Math.floor((Date.now() - ts) / 1000);
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+};
+
+const persistCollections = () => {
+  localStorage.setItem('aida:api-collections', JSON.stringify(collections.value));
+};
+
+const loadCollectionsFromStorage = () => {
+  try {
+    const saved = JSON.parse(localStorage.getItem('aida:api-collections') ?? '[]');
+    if (Array.isArray(saved)) collections.value = saved;
+  } catch {}
+};
+
+const openSaveDialog = () => {
+  saveRequestName.value = `${method.value} ${url.value.replace(/^https?:\/\/[^/]+/, '') || '/'}`.slice(0, 48);
+  saveCollectionId.value = collections.value[0]?.id ?? '__new__';
+  showSaveDialog.value = true;
+  nextTick(() => saveInputEl.value?.select());
+};
+
+const confirmSaveRequest = () => {
+  const name = saveRequestName.value.trim();
+  if (!name) return;
+  const item: ApiHistoryItem = { method: method.value, url: url.value.trim(), headersText: headersText.value, bodyText: bodyText.value, at: Date.now() };
+  if (saveCollectionId.value === '__new__') {
+    const col: ApiCollection = { id: `col-${Date.now()}`, name: name, requests: [item] };
+    collections.value = [col, ...collections.value];
+  } else {
+    const col = collections.value.find(c => c.id === saveCollectionId.value);
+    if (col) col.requests = [{ ...item, at: Date.now() }, ...col.requests];
+  }
+  persistCollections();
+  showSaveDialog.value = false;
+  sidebarTab.value = 'collections';
+  expandedCollections.value.add(saveCollectionId.value === '__new__' ? collections.value[0]?.id ?? '' : saveCollectionId.value);
+};
+
+const deleteCollection = (id: string) => {
+  collections.value = collections.value.filter(c => c.id !== id);
+  persistCollections();
+};
+
+const deleteCollectionRequest = (colId: string, idx: number) => {
+  const col = collections.value.find(c => c.id === colId);
+  if (col) { col.requests.splice(idx, 1); persistCollections(); }
+};
+
+const toggleCollection = (id: string) => {
+  if (expandedCollections.value.has(id)) expandedCollections.value.delete(id);
+  else expandedCollections.value.add(id);
+};
+
+const autoDetectUrl = async () => {
+  const project = store.currentProject;
+  if (!project) return;
+  try {
+    const pkgRaw = await invoke<string>('read_file', { path: `${project}/package.json` }).catch(() => '{}');
+    const pkg = JSON.parse(pkgRaw);
+    const proxyTarget = pkg?.proxy;
+    if (typeof proxyTarget === 'string') { url.value = proxyTarget; return; }
+    const envRaw = await invoke<string>('read_file', { path: `${project}/.env` }).catch(() => '');
+    const portMatch = envRaw.match(/(?:PORT|VITE_PORT|SERVER_PORT)\s*=\s*(\d+)/);
+    if (portMatch) { url.value = `http://localhost:${portMatch[1]}`; return; }
+    const viteRaw = await invoke<string>('read_file', { path: `${project}/vite.config.ts` }).catch(() => '');
+    const vitePort = viteRaw.match(/port\s*:\s*(\d+)/);
+    if (vitePort) { url.value = `http://localhost:${vitePort[1]}`; return; }
+    url.value = 'http://localhost:3000';
+  } catch {}
+};
+
 const copyResponse = async () => {
   await navigator.clipboard?.writeText(responseMode.value === 'body' ? responseBody.value : responseHeaders.value);
 };
@@ -251,6 +350,7 @@ onMounted(async () => {
     const saved = JSON.parse(localStorage.getItem('aida:api-history') ?? '[]');
     if (Array.isArray(saved)) history.value = saved.slice(0, 20);
   } catch {}
+  loadCollectionsFromStorage();
   await nextTick();
   urlInputRef.value?.focus();
 });
@@ -275,6 +375,12 @@ onUnmounted(() => {
         <span v-if="responseStatus" class="rounded px-1.5 py-0.5 text-[10px] font-bold" :class="statusClass">
           {{ responseStatus }} {{ responseStatusText }}
         </span>
+      </div>
+      <div class="flex items-center gap-1 mr-1" @mousedown.stop>
+        <button class="flex items-center gap-1 h-7 px-2 rounded text-[10px] text-amber-300/60 hover:text-amber-200 hover:bg-white/6 transition-colors" title="Save request to collection" @click="openSaveDialog">
+          <Star :size="12" />
+          Save
+        </button>
       </div>
       <div class="flex items-center gap-1" @mousedown.stop>
         <button class="p-1 rounded text-white/30 hover:text-white/70 hover:bg-white/6" title="Maximize" @click="toggleMaximize">
@@ -306,6 +412,13 @@ onUnmounted(() => {
             placeholder="https://api.example.com/resource"
             @keydown.enter.prevent="sendRequest"
           />
+          <button
+            class="h-8 px-2 rounded-md border border-white/8 bg-black/20 text-[10px] text-white/35 hover:text-white/65 hover:bg-white/6 transition-colors whitespace-nowrap"
+            title="Auto-detect backend URL from project config"
+            @click="autoDetectUrl"
+          >
+            <FolderOpen :size="13" />
+          </button>
           <button
             v-if="loading"
             class="h-8 rounded-md border border-rose-300/20 bg-rose-500/10 px-3 text-[11px] font-bold text-rose-200/70"
@@ -446,24 +559,118 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <aside class="min-w-0 border-l border-white/6 bg-black/12 flex flex-col">
-        <div class="h-9 flex items-center justify-between px-3 border-b border-white/6">
-          <span class="text-[10px] font-bold uppercase tracking-wide text-white/28">History</span>
-          <button class="p-1 rounded text-white/25 hover:text-rose-300 hover:bg-rose-500/10" title="Clear history" @click="clearHistory">
-            <Trash2 :size="12" />
+      <aside class="min-w-0 border-l border-white/6 bg-black/12 flex flex-col relative">
+        <!-- Sidebar tabs -->
+        <div class="h-9 flex items-center border-b border-white/6 shrink-0">
+          <button
+            class="flex-1 h-full flex items-center justify-center gap-1 text-[10px] font-bold uppercase tracking-wide transition-colors"
+            :class="sidebarTab === 'history' ? 'text-white/55 bg-white/5' : 'text-white/25 hover:text-white/45'"
+            @click="sidebarTab = 'history'"
+          >
+            <Clock3 :size="11" /> History
+          </button>
+          <button
+            class="flex-1 h-full flex items-center justify-center gap-1 text-[10px] font-bold uppercase tracking-wide transition-colors"
+            :class="sidebarTab === 'collections' ? 'text-white/55 bg-white/5' : 'text-white/25 hover:text-white/45'"
+            @click="sidebarTab = 'collections'"
+          >
+            <BookMarked :size="11" /> Saved
+          </button>
+          <button
+            v-if="sidebarTab === 'history'"
+            class="px-2 py-2 text-white/25 hover:text-rose-300 hover:bg-rose-500/10 transition-colors"
+            title="Clear history"
+            @click="clearHistory"
+          >
+            <Trash2 :size="11" />
           </button>
         </div>
-        <div class="flex-1 overflow-auto p-2 space-y-1" style="scrollbar-width:thin; scrollbar-color: rgba(255,255,255,0.07) transparent">
+
+        <!-- History tab -->
+        <div v-if="sidebarTab === 'history'" class="flex-1 overflow-auto p-2 space-y-0.5" style="scrollbar-width:thin; scrollbar-color: rgba(255,255,255,0.07) transparent">
           <button
             v-for="item in history"
             :key="`${item.method}:${item.url}:${item.at}`"
-            class="w-full rounded-md px-2 py-2 text-left hover:bg-white/5 transition-colors"
+            class="w-full rounded px-2 py-1.5 text-left hover:bg-white/5 transition-colors group"
             @click="loadHistory(item)"
           >
-            <span class="block text-[10px] font-bold text-emerald-300/65">{{ item.method }}</span>
-            <span class="block truncate text-[11px] text-white/52">{{ item.url }}</span>
+            <div class="flex items-center gap-1.5 mb-0.5">
+              <span class="text-[10px] font-bold" :class="methodColor(item.method)">{{ item.method }}</span>
+              <span class="ml-auto text-[9px] text-white/20">{{ formatTimeAgo(item.at) }}</span>
+            </div>
+            <span class="block truncate text-[11px] text-white/48">{{ item.url }}</span>
           </button>
           <div v-if="!history.length" class="px-2 py-8 text-center text-[11px] text-white/20 italic">No requests yet</div>
+        </div>
+
+        <!-- Collections tab -->
+        <div v-else class="flex-1 overflow-auto" style="scrollbar-width:thin; scrollbar-color: rgba(255,255,255,0.07) transparent">
+          <div v-if="!collections.length" class="px-3 py-8 text-center text-[11px] text-white/20 italic">
+            <Star :size="18" class="mx-auto mb-2 opacity-25" />
+            No saved collections.<br/>Click <strong class="text-white/35">Save</strong> to save a request.
+          </div>
+          <div v-for="col in collections" :key="col.id" class="border-b border-white/5">
+            <div
+              class="flex items-center gap-2 px-2 py-2 hover:bg-white/4 cursor-pointer select-none"
+              @click="toggleCollection(col.id)"
+            >
+              <FolderOpen :size="11" class="text-amber-300/50 shrink-0" />
+              <span class="text-[11px] text-white/55 flex-1 truncate">{{ col.name }}</span>
+              <span class="text-[9px] text-white/22 shrink-0">{{ col.requests.length }}</span>
+              <button class="p-0.5 rounded text-white/20 hover:text-rose-300 hover:bg-rose-500/10 transition-colors" @click.stop="deleteCollection(col.id)" title="Delete collection">
+                <Trash2 :size="10" />
+              </button>
+            </div>
+            <div v-if="expandedCollections.has(col.id)" class="bg-black/10">
+              <div
+                v-for="(req, ri) in col.requests"
+                :key="`${col.id}:${ri}`"
+                class="flex items-center gap-1.5 px-3 py-1.5 hover:bg-white/5 cursor-pointer group"
+                @click="loadHistory(req)"
+              >
+                <span class="text-[9px] font-bold w-12 shrink-0" :class="methodColor(req.method)">{{ req.method }}</span>
+                <span class="text-[10px] text-white/42 truncate flex-1">{{ req.url }}</span>
+                <button class="hidden group-hover:block p-0.5 rounded text-white/20 hover:text-rose-300" @click.stop="deleteCollectionRequest(col.id, ri)">
+                  <X :size="9" />
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Save to collection dialog -->
+        <div
+          v-if="showSaveDialog"
+          class="absolute inset-0 z-20 bg-black/70 flex items-center justify-center p-3"
+          @mousedown.self="showSaveDialog = false"
+        >
+          <div class="bg-[#16171c] border border-white/12 rounded-xl p-4 w-full shadow-xl" @mousedown.stop>
+            <div class="flex items-center gap-1.5 mb-3">
+              <Star :size="12" class="text-amber-300/70" />
+              <span class="text-[11px] font-bold text-white/55 uppercase tracking-widest">Save Request</span>
+            </div>
+            <input
+              ref="saveInputEl"
+              v-model="saveRequestName"
+              class="w-full bg-black/35 border border-white/10 rounded-lg px-3 py-1.5 text-[12px] text-white/75 outline-none focus:border-amber-300/35 mb-2"
+              placeholder="Request name"
+              @keydown.enter.prevent="confirmSaveRequest"
+              @keydown.escape.prevent="showSaveDialog = false"
+            />
+            <select
+              v-model="saveCollectionId"
+              class="w-full bg-black/35 border border-white/10 rounded-lg px-2 py-1.5 text-[12px] text-white/55 outline-none mb-3"
+            >
+              <option value="__new__">+ New collection named above</option>
+              <option v-for="col in collections" :key="col.id" :value="col.id">{{ col.name }}</option>
+            </select>
+            <div class="flex gap-2">
+              <button class="flex-1 h-8 rounded-lg bg-amber-300/90 text-black text-[11px] font-bold hover:bg-amber-200 flex items-center justify-center gap-1.5" @click="confirmSaveRequest">
+                <Check :size="12" /> Save
+              </button>
+              <button class="h-8 px-3 rounded-lg bg-white/6 text-white/45 text-[11px] hover:bg-white/10" @click="showSaveDialog = false">Cancel</button>
+            </div>
+          </div>
         </div>
       </aside>
     </div>

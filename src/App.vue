@@ -56,7 +56,39 @@ const blockBrowserShortcuts = (e: KeyboardEvent) => {
   if (matchesShortcut(e, store.settings.keybindings['open-api'] ?? 'Ctrl+Shift+A')) e.preventDefault();
   if (matchesShortcut(e, store.settings.keybindings['open-browser'] ?? 'Ctrl+Shift+G')) e.preventDefault();
   if (matchesShortcut(e, store.settings.keybindings['open-visual'] ?? 'Ctrl+Shift+V')) e.preventDefault();
+  if (matchesShortcut(e, store.settings.keybindings['new-file'] ?? 'Ctrl+N')) e.preventDefault();
+  if (matchesShortcut(e, store.settings.keybindings['toggle-sidebar'] ?? 'Ctrl+B')) e.preventDefault();
+  if (matchesShortcut(e, store.settings.keybindings['maximize-window'] ?? 'F11')) e.preventDefault();
   if (isPrimaryKey(e, 'Tab') || isPrimaryKey(e, 'Tab', { shift: true })) e.preventDefault();
+};
+
+const handleGlobalShortcuts = (e: KeyboardEvent) => {
+  if (matchesShortcut(e, store.settings.keybindings['new-file'] ?? 'Ctrl+N')) {
+    e.preventDefault();
+    menuInitialTab.value = 'files';
+    showMenu.value = true;
+    menuKey.value++;
+    return;
+  }
+  if (matchesShortcut(e, store.settings.keybindings['toggle-sidebar'] ?? 'Ctrl+B')) {
+    e.preventDefault();
+    store.isSidebarVisible = !store.isSidebarVisible;
+    return;
+  }
+  if (matchesShortcut(e, store.settings.keybindings['maximize-window'] ?? 'F11')) {
+    e.preventDefault();
+    window.dispatchEvent(new CustomEvent('aida:maximize-active-window'));
+    return;
+  }
+  // Alt+1-9: focus nth editor window
+  if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && /^[1-9]$/.test(e.key)) {
+    const idx = parseInt(e.key) - 1;
+    const win = store.editorWindows[idx];
+    if (win) {
+      e.preventDefault();
+      centerWindow(win.id);
+    }
+  }
 };
 
 const windowBounds = (win: { savedPos?: { x: number; y: number; w: number; h: number }; initPos?: { x: number; y: number; w: number; h: number } }) => {
@@ -200,6 +232,7 @@ const handleActiveLsp = (e: Event) => {
 
 onMounted(async () => {
   window.addEventListener('keydown', blockBrowserShortcuts, { capture: true });
+  window.addEventListener('keydown', handleGlobalShortcuts);
   window.addEventListener('beforeunload', confirmBeforeUnload);
   window.addEventListener('aida:lsp-diagnostics', handleLspDiagnostics);
   window.addEventListener('aida:lsp-active', handleActiveLsp);
@@ -228,7 +261,7 @@ onMounted(async () => {
         }>;
         browserWindows?: Array<{
           id?: string;
-          tabs?: { id?: string; title: string; url: string; srcdoc?: string; mode?: 'embed' | 'native'; nativeWindowLabel?: string; nativeOpened?: boolean }[];
+          tabs?: { id?: string; title: string; url: string; srcdoc?: string }[];
           activeTabId?: string | null;
           savedPos?: { x: number; y: number; w: number; h: number };
         }>;
@@ -281,9 +314,6 @@ onMounted(async () => {
               title: tab.title,
               url: tab.url,
               srcdoc: tab.srcdoc,
-              mode: tab.mode ?? 'embed',
-              nativeWindowLabel: tab.nativeWindowLabel,
-              nativeOpened: false,
             })),
             activeTabId: win.activeTabId ?? win.tabs?.[0]?.id ?? `bt_s${index}_0`,
             initPos: win.savedPos,
@@ -303,6 +333,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener('keydown', blockBrowserShortcuts, { capture: true });
+  window.removeEventListener('keydown', handleGlobalShortcuts);
   window.removeEventListener('beforeunload', confirmBeforeUnload);
   window.removeEventListener('aida:lsp-diagnostics', handleLspDiagnostics);
   window.removeEventListener('aida:lsp-active', handleActiveLsp);
@@ -318,7 +349,7 @@ onUnmounted(() => {
       @toggle-menu="toggleMenu"
       @open-git="openGit"
       @open-debug="showDebug = true"
-      @open-browser="store.openBrowserWindow({ url: 'about:blank', title: 'Browser' })"
+      @open-browser="store.openBrowserWindow({ url: 'https://google.com', title: 'Browser' })"
       @open-api="showApiClient = true"
       @open-visual="showVisualBuilder = true"
       @focus-window="centerWindow"
@@ -332,7 +363,7 @@ onUnmounted(() => {
       @open-problems="showProblems = true"
       @open-tasks="showTasks = true"
       @open-debug="showDebug = true"
-      @open-browser="store.openBrowserWindow({ url: 'about:blank', title: 'Browser' })"
+      @open-browser="store.openBrowserWindow({ url: 'https://google.com', title: 'Browser' })"
       @open-api="showApiClient = true"
       @open-visual="showVisualBuilder = true"
     />

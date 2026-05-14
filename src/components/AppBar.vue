@@ -98,7 +98,7 @@ onUnmounted(() => window.removeEventListener('mousedown', handleGlobalMouseDown,
       <button
         class="flex items-center gap-1.5 bg-white/4 border border-white/7 rounded-md px-3 py-1 text-[12px] font-semibold text-white/45 hover:bg-white/8 hover:text-white/70 transition-colors shrink-0"
         @click="emit('openBrowser')"
-        title="Browser window"
+        title="Browser (Ctrl+Shift+G)"
       >
         <Globe2 :size="13" />
         <span>Browser</span>

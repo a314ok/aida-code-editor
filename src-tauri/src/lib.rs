@@ -55,6 +55,7 @@ pub fn run() {
             git::git_stash_apply,
             git::git_stash_drop,
             git::git_commit,
+            git::git_amend_commit,
             git::git_push,
             git::git_pull,
             git::git_log,
