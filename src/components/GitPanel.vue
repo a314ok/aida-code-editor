@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '../lib/ipc';
 import { useEditorStore, type GitFileStatus } from '../stores/editor';
 import { Archive, Clock3, Download, Eye, GitBranch, GitCommit, GitCompare, Loader2, Minus, Plus, RefreshCw, RotateCcw, Upload } from 'lucide-vue-next';
 

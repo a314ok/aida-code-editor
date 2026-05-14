@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '../lib/ipc';
 import { EditorState } from '@codemirror/state';
 import {
   EditorView, keymap, highlightSpecialChars, drawSelection, highlightActiveLine,

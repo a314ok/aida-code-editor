@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
-import { invoke } from '@tauri-apps/api/core';
-import { open } from '@tauri-apps/plugin-dialog';
+import { invoke } from '../lib/ipc';
+import { open } from '../lib/dialog';
 import { useEditorStore, type FileEntry, type GitFileStatus } from '../stores/editor';
 import {
   Search, X, FolderOpen, FilePlus, FolderPlus, RefreshCw,

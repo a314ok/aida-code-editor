@@ -1,5 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
+import { invoke, listen } from './ipc';
 
 type ServerConfig = {
   id: string;
@@ -343,7 +342,7 @@ export class LspClient {
         languages: server.languages,
         available: false,
         command: null,
-        source: 'Tauri command unavailable',
+        source: 'IPC command unavailable',
       }));
     }
   }

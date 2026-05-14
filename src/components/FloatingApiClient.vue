@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '../lib/ipc';
 import { BookMarked, Check, Clock3, Copy, FolderOpen, Maximize2, Minimize2, Plus, Play, Star, Trash2, X } from 'lucide-vue-next';
 import { useFloating } from '../composables/useFloating';
 import { useEditorStore } from '../stores/editor';

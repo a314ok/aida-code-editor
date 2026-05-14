@@ -1,6 +1,9 @@
 node_modules/
 *.log
+*.tsbuildinfo
 dist
+dist-electron
+release
 .vscode
 src-tauri/target/
 # Logs
@@ -16,6 +19,7 @@ dev.log
 
 node_modules
 dist
+dist-electron
 dist-ssr
 *.local
 
