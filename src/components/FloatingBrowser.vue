@@ -214,10 +214,11 @@ const windowStyle = computed(() => ({
       @dblclick.self="toggleMaximize"
     >
       <div class="flex items-center gap-1 flex-1 min-w-0 overflow-x-auto" style="scrollbar-width:none">
-        <button
+        <div
           v-for="tab in win.tabs"
           :key="tab.id"
-          class="group flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] shrink-0 transition-colors max-w-[180px]"
+          role="tab"
+          class="group flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] shrink-0 transition-colors max-w-[180px] cursor-pointer"
           :class="win.activeTabId === tab.id ? 'bg-white/10 text-white/85' : 'text-white/35 hover:bg-white/6 hover:text-white/65'"
           @mousedown.stop
           @click="win.activeTabId = tab.id; bringToFront()"
@@ -229,7 +230,7 @@ const windowStyle = computed(() => ({
             @mousedown.stop
             @click.stop="store.closeBrowserTab(windowId, tab.id)"
           ><X :size="9" /></button>
-        </button>
+        </div>
         <button
           class="p-1 rounded text-white/25 hover:text-white/55 hover:bg-white/6 transition-colors shrink-0"
           title="New tab"
