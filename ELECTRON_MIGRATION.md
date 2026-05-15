@@ -1,5 +1,7 @@
 # Electron Migration Task
 
+
+
 ## Goal
 Migrate this project from Tauri v2 to Electron while keeping the Vue 3 frontend intact.
 Create a fully working Electron-based version of the Aida Studio code editor.
