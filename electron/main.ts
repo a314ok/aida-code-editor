@@ -1,6 +1,7 @@
 import { app, BrowserWindow, Menu } from "electron";
 import { is } from "@electron-toolkit/utils";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { registerDapHandlers } from "./ipc/dap";
 import { registerFsHandlers } from "./ipc/fs";
 import { registerGitHandlers } from "./ipc/git";
@@ -10,6 +11,7 @@ import { registerTaskHandlers } from "./ipc/tasks";
 import { registerWindowHandlers } from "./ipc/window";
 
 let mainWindow: BrowserWindow | null = null;
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 function getMainWindow(): BrowserWindow | null {
   return mainWindow;
