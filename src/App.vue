@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue';
 import type { CSSProperties } from 'vue';
-import { invoke } from './lib/electron/ipc';
+import { invoke } from '@tauri-apps/api/core';
 import AppBar from './components/AppBar.vue';
 import FloatingEditor from './components/FloatingEditor.vue';
 import FloatingBrowser from './components/FloatingBrowser.vue';

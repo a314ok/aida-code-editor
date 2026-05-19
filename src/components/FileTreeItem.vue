@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { type FileEntry, useEditorStore } from '../stores/editor';
 import { ChevronRight, ChevronDown, Folder, FolderOpen, Trash2, Edit2 } from 'lucide-vue-next';
-import { invoke } from '../lib/electron/ipc';
+import { invoke } from '@tauri-apps/api/core';
 
 const props = defineProps<{
   item: FileEntry;

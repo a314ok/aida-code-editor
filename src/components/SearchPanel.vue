@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue';
-import { invoke } from '../lib/electron/ipc';
+import { invoke } from '@tauri-apps/api/core';
 import { useEditorStore, type SearchResult } from '../stores/editor';
 import { Search, Loader2, X } from 'lucide-vue-next';
 

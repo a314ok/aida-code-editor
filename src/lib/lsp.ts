@@ -1,5 +1,5 @@
-import { invoke } from './electron/ipc';
-import { listen } from './electron/events';
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 
 type ServerConfig = {
   id: string;
@@ -343,7 +343,7 @@ export class LspClient {
         languages: server.languages,
         available: false,
         command: null,
-        source: 'Electron command unavailable',
+        source: 'Tauri command unavailable',
       }));
     }
   }

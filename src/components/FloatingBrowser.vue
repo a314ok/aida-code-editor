@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
-import { invoke } from '../lib/electron/ipc';
+import { invoke } from '@tauri-apps/api/core';
 import { ArrowLeft, ArrowRight, Code2, ExternalLink, Globe2, Maximize2, Minimize2, Plus, RefreshCw, Search, TerminalSquare, X } from 'lucide-vue-next';
 import { useEditorStore } from '../stores/editor';
 import type { BrowserTab } from '../stores/editor';
@@ -174,7 +174,7 @@ const syncEmbeddedViewNow = async (navigate = false) => {
       nativeOpened: true,
     });
   } catch {
-    embeddedViewError.value = 'Native browser view is not available in this Electron session.';
+    embeddedViewError.value = 'Embedded webview is available inside the Tauri app runtime.';
   }
 };
 
@@ -421,16 +421,12 @@ onUnmounted(() => {
       style="scrollbar-width:none"
       @mousedown="startDrag"
     >
-      <div
+      <button
         v-for="tab in tabs"
         :key="tab.id"
-        role="button"
-        tabindex="0"
         class="tab-item group flex items-center gap-2 px-3 border-r border-white/5 cursor-pointer transition-all shrink-0 relative max-w-[220px]"
         :class="activeTabId === tab.id ? 'bg-white/8 text-white' : 'text-white/38 hover:text-white/68 hover:bg-white/3'"
         @click.stop="activeTabId = tab.id"
-        @keydown.enter.prevent.stop="activeTabId = tab.id"
-        @keydown.space.prevent.stop="activeTabId = tab.id"
       >
         <Globe2 :size="12" class="shrink-0" />
         <span class="text-[12px] truncate pointer-events-none">{{ tab.title }}</span>
@@ -440,7 +436,7 @@ onUnmounted(() => {
         >
           <X :size="10" />
         </button>
-      </div>
+      </button>
       <button
         class="tab-item flex items-center justify-center px-3 text-white/35 hover:text-white/70 hover:bg-white/4"
         title="New browser tab (Ctrl+T)"

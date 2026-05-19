@@ -1,5 +1,5 @@
-import { invoke } from './electron/ipc';
-import { listen } from './electron/events';
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 
 export type DapCommandCandidate = { cmd: string; args: string[] };
 export type ResolvedDapCommand = { cmd: string; args: string[]; source: string };
@@ -183,7 +183,7 @@ export class DapClient {
         languages: adapter.languages,
         available: false,
         command: null,
-        source: 'Electron command unavailable',
+        source: 'Tauri command unavailable',
       }));
     }
   }

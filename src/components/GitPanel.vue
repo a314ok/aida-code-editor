@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
-import { invoke } from '../lib/electron/ipc';
+import { invoke } from '@tauri-apps/api/core';
 import { useEditorStore, type GitFileStatus } from '../stores/editor';
 import { Archive, Clock3, Download, Eye, GitBranch, GitCommit, GitCompare, Loader2, Minus, Plus, RefreshCw, RotateCcw, Upload } from 'lucide-vue-next';
 
@@ -129,8 +129,6 @@ const flash = (msg: string, isErr = false) => {
   setTimeout(() => { statusMsg.value = ''; errMsg.value = ''; }, 3000);
 };
 
-const isBridgeUnavailable = (error: unknown) => String(error).includes('Electron bridge is not available');
-
 const refreshGitTools = async () => {
   if (!store.currentProject) return;
   try {
@@ -249,7 +247,6 @@ const loadHistory = async () => {
       limit: 80,
     });
   } catch (e: any) {
-    if (isBridgeUnavailable(e)) return;
     flash(String(e), true);
   } finally {
     historyLoading.value = false;
@@ -268,7 +265,6 @@ const loadGraph = async () => {
       selectedGraphHash.value = graphItems.value[0]?.hash ?? '';
     }
   } catch (e: any) {
-    if (isBridgeUnavailable(e)) return;
     flash(String(e), true);
   } finally {
     graphLoading.value = false;
@@ -792,10 +788,10 @@ const statusClass: Record<string, string> = {
       </div>
     </div>
 
-    <div class="p-3 grid grid-cols-[minmax(220px,250px)_minmax(280px,340px)_minmax(0,1fr)] 2xl:grid-cols-[minmax(230px,250px)_minmax(300px,340px)_minmax(0,1fr)_minmax(230px,250px)] grid-rows-[auto_minmax(0,1fr)_auto] 2xl:grid-rows-[auto_minmax(0,1fr)] gap-3 flex-1 overflow-hidden min-h-0">
+    <div class="p-4 grid grid-cols-[380px_minmax(0,1fr)] grid-rows-[auto_auto_minmax(260px,1fr)_minmax(230px,0.7fr)] gap-4 flex-1 overflow-hidden min-h-0">
 
       <!-- Branches, stash, conflicts -->
-      <div class="col-start-1 col-span-3 row-start-3 2xl:col-start-4 2xl:col-span-1 2xl:row-start-1 2xl:row-span-2 grid grid-cols-3 2xl:grid-cols-1 gap-3 min-h-0 max-h-48 2xl:max-h-none overflow-y-auto pr-1" style="scrollbar-width:thin; scrollbar-color: rgba(255,255,255,0.09) transparent">
+      <div class="col-start-1 row-start-4 grid grid-cols-1 gap-3 min-h-0 overflow-y-auto pr-1" style="scrollbar-width:thin; scrollbar-color: rgba(255,255,255,0.09) transparent">
         <div class="rounded-xl border border-white/8 bg-[#12131a] p-3 min-w-0 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
           <div class="flex items-center justify-between gap-2 mb-2">
             <div class="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-white/30">
@@ -974,7 +970,7 @@ const statusClass: Record<string, string> = {
         </div>
       </div>
 
-      <div v-if="conflicts.length" class="col-start-1 row-start-2 self-start max-h-56 overflow-y-auto rounded-xl border border-rose-500/24 bg-rose-500/10 px-3 py-2 shrink-0 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]" style="scrollbar-width:thin; scrollbar-color: rgba(244,63,94,0.22) transparent">
+      <div v-if="conflicts.length" class="col-start-1 row-start-2 rounded-xl border border-rose-500/24 bg-rose-500/10 px-3 py-2 shrink-0 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
         <div class="text-[10px] font-bold uppercase tracking-wide text-rose-300/80 mb-1">
           Conflicts ({{ conflicts.length }})
         </div>
@@ -1041,15 +1037,15 @@ const statusClass: Record<string, string> = {
           <button
             @click="stageAll"
             :disabled="loading || !canStageAll"
-            class="flex-1 min-w-0 bg-white/5 hover:bg-white/9 border border-white/9 text-white/64 py-2 px-2 rounded-lg text-[11px] flex items-center justify-center gap-1.5 whitespace-nowrap transition-all disabled:opacity-30"
+            class="flex-1 bg-white/5 hover:bg-white/9 border border-white/9 text-white/64 py-2 px-3 rounded-lg text-[11px] flex items-center justify-center gap-1.5 transition-all disabled:opacity-30"
           >
             <Plus :size="12" />
-            Stage
+            Stage All
           </button>
           <button
             @click="unstageAll"
             :disabled="loading || !canUnstageAll"
-            class="flex-1 min-w-0 bg-white/5 hover:bg-white/9 border border-white/9 text-white/64 py-2 px-2 rounded-lg text-[11px] flex items-center justify-center gap-1.5 whitespace-nowrap transition-all disabled:opacity-30"
+            class="flex-1 bg-white/5 hover:bg-white/9 border border-white/9 text-white/64 py-2 px-3 rounded-lg text-[11px] flex items-center justify-center gap-1.5 transition-all disabled:opacity-30"
           >
             <Minus :size="12" />
             Unstage
@@ -1058,7 +1054,7 @@ const statusClass: Record<string, string> = {
             @click="commitChanges"
             :disabled="!canCommit"
             :title="stagedEntries.length ? 'Commit staged files' : 'Stage at least one file first'"
-            class="flex-1 min-w-0 bg-emerald-300 text-black font-bold py-2 px-2 rounded-lg text-[11px] flex items-center justify-center gap-1.5 whitespace-nowrap hover:bg-emerald-200 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+            class="flex-1 bg-emerald-300 text-black font-bold py-2 px-3 rounded-lg text-[11px] flex items-center justify-center gap-1.5 hover:bg-emerald-200 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
           >
             <Loader2 v-if="loading" :size="11" class="animate-spin" />
             <GitCommit v-else :size="11" />
@@ -1068,15 +1064,15 @@ const statusClass: Record<string, string> = {
       </div>
 
       <!-- Flash messages -->
-      <div v-if="statusMsg" class="col-start-1 row-start-2 self-start text-[11px] text-emerald-200 bg-emerald-500/10 border border-emerald-500/24 rounded-xl px-3 py-2">
+      <div v-if="statusMsg" class="col-start-1 row-start-2 text-[11px] text-emerald-200 bg-emerald-500/10 border border-emerald-500/24 rounded-xl px-3 py-2">
         {{ statusMsg }}
       </div>
-      <div v-if="errMsg" class="col-start-1 row-start-2 self-start text-[11px] text-rose-200 bg-rose-500/10 border border-rose-500/24 rounded-xl px-3 py-2 break-all">
+      <div v-if="errMsg" class="col-start-1 row-start-2 text-[11px] text-rose-200 bg-rose-500/10 border border-rose-500/24 rounded-xl px-3 py-2 break-all">
         {{ errMsg }}
       </div>
 
       <!-- Changes list -->
-      <div class="col-start-2 row-start-1 row-span-2 flex flex-col gap-3 overflow-hidden min-h-0 rounded-xl border border-white/8 bg-[#12131a] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+      <div class="col-start-1 row-start-3 flex flex-col gap-3 overflow-hidden min-h-[220px] rounded-xl border border-white/8 bg-[#12131a] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
         <div class="flex items-center justify-between gap-3">
           <span class="text-[10px] font-bold text-white/50 uppercase tracking-widest">
             Changes
@@ -1158,7 +1154,7 @@ const statusClass: Record<string, string> = {
         </div>
       </div>
 
-      <div v-if="historyOutput" class="col-start-3 row-start-1 row-span-2 min-w-0 min-h-0 border border-white/8 rounded-2xl bg-[#101116] flex flex-col overflow-hidden shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+      <div v-if="historyOutput" class="col-start-2 row-start-1 row-span-4 min-w-0 min-h-0 border border-white/8 rounded-2xl bg-[#101116] flex flex-col overflow-hidden shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
         <div class="h-12 flex items-center justify-between gap-2 px-4 border-b border-white/7 bg-white/[0.025] shrink-0">
           <div class="flex items-center gap-2 min-w-0">
             <GitCompare :size="14" class="text-sky-300/62 shrink-0" />
@@ -1174,7 +1170,7 @@ const statusClass: Record<string, string> = {
         <pre class="flex-1 overflow-auto p-4 text-[11px] leading-5 text-white/66 font-mono whitespace-pre-wrap" style="scrollbar-width:thin; scrollbar-color: rgba(255,255,255,0.09) transparent">{{ historyOutput }}</pre>
       </div>
 
-      <div v-else-if="selectedFile" class="col-start-3 row-start-1 row-span-2 min-w-0 min-h-0 border border-white/8 rounded-2xl bg-[#101116] flex flex-col gap-3 overflow-hidden shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+      <div v-else-if="selectedFile" class="col-start-2 row-start-1 row-span-4 min-w-0 min-h-0 border border-white/8 rounded-2xl bg-[#101116] flex flex-col gap-3 overflow-hidden shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
         <div class="h-12 flex items-center justify-between gap-2 px-4 border-b border-white/7 bg-white/[0.025] shrink-0">
           <span class="text-[11px] font-bold text-white/62 uppercase tracking-wide truncate">
             Diff: {{ selectedFileName }}
@@ -1270,7 +1266,7 @@ const statusClass: Record<string, string> = {
       </div>
       <div
         v-else
-        class="col-start-3 row-start-1 row-span-2 min-w-0 min-h-0 border border-white/8 rounded-2xl bg-[#101116] flex flex-col overflow-hidden shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]"
+        class="col-start-2 row-start-1 row-span-4 min-w-0 min-h-0 border border-white/8 rounded-2xl bg-[#101116] flex flex-col overflow-hidden shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]"
       >
         <div class="h-12 flex items-center justify-between gap-2 px-4 border-b border-white/7 bg-white/[0.025] shrink-0">
           <div class="flex items-center gap-2 min-w-0">

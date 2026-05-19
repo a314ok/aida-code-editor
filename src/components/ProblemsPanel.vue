@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted } from 'vue';
-import { invoke } from '../lib/electron/ipc';
+import { invoke } from '@tauri-apps/api/core';
 import { AlertCircle, AlertTriangle, Info, Lightbulb, X } from 'lucide-vue-next';
 import { useEditorStore, type EditorDiagnostic } from '../stores/editor';
 
