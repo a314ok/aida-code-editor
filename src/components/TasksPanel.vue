@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '../lib/electron/ipc';
 import {
   AlertTriangle,
   CheckCircle2,

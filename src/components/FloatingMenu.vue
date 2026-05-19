@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
-import { invoke } from '@tauri-apps/api/core';
-import { open } from '@tauri-apps/plugin-dialog';
+import { invoke } from '../lib/electron/ipc';
+import { open } from '../lib/electron/dialog';
 import { useEditorStore, type FileEntry, type GitFileStatus } from '../stores/editor';
 import {
   Search, X, FolderOpen, FilePlus, FolderPlus, RefreshCw,
@@ -21,7 +21,6 @@ const loading = ref(false);
 const expandedDirs = ref(new Set<string>());
 const quickSearch = ref('');
 
-/* ── flatten tree for quick search ──────────────── */
 const flattenTree = (items: FileEntry[], out: FileEntry[] = []): FileEntry[] => {
   for (const item of items) {
     if (item.kind === 'file') out.push(item);
@@ -52,8 +51,25 @@ const quickResults = computed(() => {
 
 const selectedIdx = ref(0);
 const projectName = (path: string) => path.replace(/\\/g, '/').split('/').filter(Boolean).pop() ?? path;
+let previousCanvasOverflow = '';
+let previousCanvasOverscroll = '';
 
-/* ── git ─────────────────────────────────────────── */
+const lockCanvasScroll = () => {
+  const canvas = document.getElementById('main-canvas');
+  if (!canvas) return;
+  previousCanvasOverflow = canvas.style.overflow;
+  previousCanvasOverscroll = canvas.style.overscrollBehavior;
+  canvas.style.overflow = 'hidden';
+  canvas.style.overscrollBehavior = 'contain';
+};
+
+const unlockCanvasScroll = () => {
+  const canvas = document.getElementById('main-canvas');
+  if (!canvas) return;
+  canvas.style.overflow = previousCanvasOverflow;
+  canvas.style.overscrollBehavior = previousCanvasOverscroll;
+};
+
 const loadGitStatus = async () => {
   if (!store.currentProject) return;
   try {
@@ -67,7 +83,6 @@ const loadGitStatus = async () => {
   } catch {}
 };
 
-/* ── files ───────────────────────────────────────── */
 const loadFiles = async (path: string) => {
   loading.value = true;
   try { return await invoke<FileEntry[]>('get_dir_tree', { path }); }
@@ -126,7 +141,7 @@ const handleFileClick = async (file: FileEntry, event?: MouseEvent) => {
 };
 
 const createFile = async () => {
-  const name = prompt('Назва файлу:');
+  const name = prompt('File name:');
   if (name && store.currentProject) {
     try { await invoke('create_file', { path: `${store.currentProject}/${name}` }); await init(); }
     catch (e) { alert(e); }
@@ -134,25 +149,32 @@ const createFile = async () => {
 };
 
 const createFolder = async () => {
-  const name = prompt('Назва папки:');
+  const name = prompt('Folder name:');
   if (name && store.currentProject) {
     try { await invoke('create_directory', { path: `${store.currentProject}/${name}` }); await init(); }
     catch (e) { alert(e); }
   }
 };
 
-/* ── keyboard navigation ─────────────────────────── */
 const handleKey = (e: KeyboardEvent) => {
   if (e.key === 'Escape') { emit('close'); return; }
   if (quickSearch.value && quickResults.value.length) {
     if (e.key === 'ArrowDown') { e.preventDefault(); selectedIdx.value = (selectedIdx.value + 1) % quickResults.value.length; }
-    if (e.key === 'ArrowUp')   { e.preventDefault(); selectedIdx.value = (selectedIdx.value - 1 + quickResults.value.length) % quickResults.value.length; }
-    if (e.key === 'Enter')     { e.preventDefault(); openFile(quickResults.value[selectedIdx.value]); }
+    if (e.key === 'ArrowUp') { e.preventDefault(); selectedIdx.value = (selectedIdx.value - 1 + quickResults.value.length) % quickResults.value.length; }
+    if (e.key === 'Enter') { e.preventDefault(); openFile(quickResults.value[selectedIdx.value]); }
   }
 };
 
-onMounted(() => { if (props.initialTab === 'git') quickSearch.value = ''; init(); window.addEventListener('keydown', handleKey); });
-onUnmounted(() => window.removeEventListener('keydown', handleKey));
+onMounted(() => {
+  if (props.initialTab === 'git') quickSearch.value = '';
+  lockCanvasScroll();
+  init();
+  window.addEventListener('keydown', handleKey);
+});
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleKey);
+  unlockCanvasScroll();
+});
 watch(() => props.initialTab, tab => {
   activeTab.value = tab;
   if (tab === 'git') quickSearch.value = '';
@@ -160,31 +182,40 @@ watch(() => props.initialTab, tab => {
 </script>
 
 <template>
-  <!-- Backdrop -->
   <div
-    class="fixed inset-0 z-[1000] flex items-start justify-center pt-16 bg-black/60"
+    class="fixed inset-0 z-[1000] flex items-start justify-center pt-10 bg-black/60 overscroll-contain"
     @mousedown.self="emit('close')"
+    @wheel.self.prevent.stop
+    @touchmove.self.prevent.stop
   >
-    <!-- Panel -->
     <div
-      class="flex flex-col bg-[#0e0e14] border border-white/9 rounded-2xl shadow-[0_24px_56px_rgba(0,0,0,0.78)] overflow-hidden transition-[width,height] duration-150"
-      :class="activeTab === 'git' ? 'w-[1320px] max-w-[calc(100vw-28px)] h-[86vh]' : 'w-[540px]'"
+      class="flex flex-col bg-[#0e0e14] border border-white/9 rounded-2xl shadow-[0_24px_56px_rgba(0,0,0,0.78)] overflow-hidden overscroll-contain transition-[width,height] duration-150"
+      :class="activeTab === 'git' ? 'w-[1680px] max-w-[calc(100vw-28px)] h-[90vh]' : 'w-[540px]'"
       :style="activeTab === 'git' ? {} : { maxHeight: '72vh' }"
+      @wheel.stop
+      @touchmove.stop
     >
-
-      <!-- ── Search header ── -->
       <div class="flex items-center gap-3 px-4 py-3 border-b border-white/6 shrink-0">
-        <Search :size="15" class="text-white/30 shrink-0" />
-        <input
-          v-model="quickSearch"
-          @input="selectedIdx = 0"
-          type="text"
-          placeholder="Швидкий пошук файлів…"
-          class="bg-transparent flex-1 text-[13px] text-white/80 placeholder:text-white/25 outline-none"
-          autofocus
-        />
+        <template v-if="activeTab === 'git'">
+          <GitBranch :size="15" class="text-emerald-300/75 shrink-0" />
+          <div class="min-w-0 flex-1">
+            <div class="text-[12px] font-bold uppercase tracking-widest text-white/70">Git Workspace</div>
+            <div class="text-[10px] text-white/28 font-mono truncate">{{ store.currentProject?.replace(/\\/g, '/') ?? './' }}</div>
+          </div>
+        </template>
+        <template v-else>
+          <Search :size="15" class="text-white/30 shrink-0" />
+          <input
+            v-model="quickSearch"
+            @input="selectedIdx = 0"
+            type="text"
+            placeholder="Quick file search..."
+            class="bg-transparent flex-1 text-[13px] text-white/80 placeholder:text-white/25 outline-none"
+            autofocus
+          />
+        </template>
         <div class="flex items-center gap-1 shrink-0">
-          <button @click="openFolder" class="p-1.5 rounded text-white/25 hover:text-white/65 hover:bg-white/6 transition-colors" title="Відкрити папку">
+          <button @click="openFolder" class="p-1.5 rounded text-white/25 hover:text-white/65 hover:bg-white/6 transition-colors" title="Open folder">
             <FolderOpen :size="14" />
           </button>
           <button @click="emit('close')" class="p-1.5 rounded text-white/25 hover:text-white/65 hover:bg-white/6 transition-colors">
@@ -193,7 +224,6 @@ watch(() => props.initialTab, tab => {
         </div>
       </div>
 
-      <!-- ── Quick search results ── -->
       <template v-if="quickSearch.trim()">
         <div class="flex items-center gap-1 bg-white/5 rounded-lg p-0.5 mx-3 mt-2 shrink-0">
           <button
@@ -202,7 +232,7 @@ watch(() => props.initialTab, tab => {
             :class="activeTab === 'files' ? 'bg-white/10 text-white/80' : 'text-white/30 hover:text-white/55'"
           >
             <Files :size="12" />
-            Провідник
+            Explorer
           </button>
           <button
             @click="activeTab = 'git'; quickSearch = ''"
@@ -225,7 +255,7 @@ watch(() => props.initialTab, tab => {
             <span
               class="text-[9px] font-bold font-mono w-7 text-center shrink-0"
               :class="extColor[getExt(file.name)] ?? 'text-white/30'"
-            >{{ getExt(file.name).slice(0, 4) || '·' }}</span>
+            >{{ getExt(file.name).slice(0, 4) || '-' }}</span>
             <span class="text-[13px] text-white/80 truncate flex-1">{{ file.name }}</span>
             <span class="text-[10px] text-white/20 truncate max-w-[160px] font-mono">
               {{ file.path.replace(/\\/g, '/').split('/').slice(-3, -1).join('/') }}
@@ -234,24 +264,19 @@ watch(() => props.initialTab, tab => {
           </div>
 
           <div v-if="!quickResults.length" class="px-4 py-6 text-center">
-            <p class="text-[12px] text-white/20 italic">Нічого не знайдено</p>
+            <p class="text-[12px] text-white/20 italic">No files found</p>
           </div>
         </div>
 
-        <!-- Hint -->
         <div class="px-4 py-2 border-t border-white/5 flex items-center gap-4 shrink-0">
-          <span class="text-[10px] text-white/20"><kbd class="border border-white/12 rounded px-1 font-mono">↑↓</kbd> навігація</span>
-          <span class="text-[10px] text-white/20"><kbd class="border border-white/12 rounded px-1 font-mono">Enter</kbd> відкрити</span>
-          <span class="text-[10px] text-white/20"><kbd class="border border-white/12 rounded px-1 font-mono">Esc</kbd> закрити</span>
+          <span class="text-[10px] text-white/20"><kbd class="border border-white/12 rounded px-1 font-mono">Up/Down</kbd> navigate</span>
+          <span class="text-[10px] text-white/20"><kbd class="border border-white/12 rounded px-1 font-mono">Enter</kbd> open</span>
+          <span class="text-[10px] text-white/20"><kbd class="border border-white/12 rounded px-1 font-mono">Esc</kbd> close</span>
         </div>
       </template>
 
-      <!-- ── Normal mode: tabs + content ── -->
       <template v-else>
-
-        <!-- Tab bar + file actions -->
         <div class="flex items-center justify-between px-3 pt-2 pb-1 shrink-0">
-          <!-- Tabs -->
           <div class="flex items-center gap-1 bg-white/5 rounded-lg p-0.5">
             <button
               @click="activeTab = 'files'"
@@ -259,10 +284,10 @@ watch(() => props.initialTab, tab => {
               :class="activeTab === 'files' ? 'bg-white/10 text-white/80' : 'text-white/30 hover:text-white/55'"
             >
               <Files :size="12" />
-              Провідник
+              Explorer
             </button>
             <button
-              @click="activeTab = 'git'"
+              @click="activeTab = 'git'; quickSearch = ''"
               class="flex items-center gap-1.5 px-3 py-1 rounded-md text-[11px] font-bold uppercase tracking-wider transition-all relative"
               :class="activeTab === 'git' ? 'bg-white/10 text-white/80' : 'text-white/30 hover:text-white/55'"
             >
@@ -275,21 +300,21 @@ watch(() => props.initialTab, tab => {
             </button>
           </div>
 
-          <!-- File actions (only on files tab) -->
           <div v-if="activeTab === 'files'" class="flex items-center gap-1.5">
-            <button @click="createFile"   title="Новий файл"  class="p-1.5 rounded text-white/25 hover:text-white/65 hover:bg-white/6 transition-colors"><FilePlus   :size="13" /></button>
-            <button @click="createFolder" title="Нова папка"  class="p-1.5 rounded text-white/25 hover:text-white/65 hover:bg-white/6 transition-colors"><FolderPlus :size="13" /></button>
-            <button @click="init"         title="Оновити"
+            <button @click="createFile" title="New file" class="p-1.5 rounded text-white/25 hover:text-white/65 hover:bg-white/6 transition-colors"><FilePlus :size="13" /></button>
+            <button @click="createFolder" title="New folder" class="p-1.5 rounded text-white/25 hover:text-white/65 hover:bg-white/6 transition-colors"><FolderPlus :size="13" /></button>
+            <button
+              @click="init"
+              title="Refresh"
               class="p-1.5 rounded text-white/25 hover:text-white/65 hover:bg-white/6 transition-colors"
               :class="{ 'animate-spin': loading }"
             ><RefreshCw :size="13" /></button>
           </div>
         </div>
 
-        <!-- Project path hint -->
         <div v-if="activeTab === 'files'" class="px-4 pb-1 shrink-0">
           <span class="text-[10px] text-white/20 font-mono">
-            {{ store.currentProject ? store.currentProject.replace(/\\/g, '/') : 'Немає відкритої папки' }}
+            {{ store.currentProject ? store.currentProject.replace(/\\/g, '/') : 'No folder open' }}
           </span>
         </div>
 
@@ -317,17 +342,14 @@ watch(() => props.initialTab, tab => {
           </div>
         </div>
 
-        <!-- Content -->
         <div class="flex-1 overflow-hidden flex flex-col min-h-0">
-
-          <!-- Files -->
           <template v-if="activeTab === 'files'">
             <div
               class="flex-1 overflow-y-auto"
               style="scrollbar-width:thin; scrollbar-color: rgba(255,255,255,0.07) transparent"
             >
               <div v-if="!store.fileTree.length && !loading" class="px-4 py-8 text-center">
-                <p class="text-[12px] text-white/20 italic">Натисніть 📁 вище щоб відкрити проект</p>
+                <p class="text-[12px] text-white/20 italic">Open a project from the folder button above.</p>
               </div>
               <FileTreeItem
                 v-for="item in store.fileTree"
@@ -341,11 +363,9 @@ watch(() => props.initialTab, tab => {
             </div>
           </template>
 
-          <!-- Git -->
           <template v-else-if="activeTab === 'git'">
             <GitPanel @refresh="init" />
           </template>
-
         </div>
       </template>
     </div>

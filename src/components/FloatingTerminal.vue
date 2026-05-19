@@ -3,8 +3,8 @@ import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import { Terminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
 import { WebglAddon } from 'xterm-addon-webgl';
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
+import { invoke } from '../lib/electron/ipc';
+import { listen } from '../lib/electron/events';
 import 'xterm/css/xterm.css';
 import { useEditorStore } from '../stores/editor';
 import { useFloating } from '../composables/useFloating';
@@ -79,14 +79,12 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <!-- Floating terminal panel -->
   <div
     class="absolute flex flex-col rounded-xl border border-white/8 bg-[#0d0d10] shadow-[0_8px_40px_rgba(0,0,0,0.6)] overflow-hidden"
     :class="{ 'cursor-move': dragging, 'cursor-nwse-resize': resizing }"
     :style="{ left: pos.x + 'px', top: pos.y + 'px', width: pos.w + 'px', height: pos.h + 'px', zIndex: pos.z }"
     @mousedown.capture="bringToFront"
   >
-    <!-- Panel header — drag handle -->
     <div
       class="h-9 flex items-center justify-between px-4 border-b border-white/6 shrink-0 bg-[#0b0b0e] cursor-move"
       @mousedown="startDrag"
@@ -96,12 +94,12 @@ onBeforeUnmount(() => {
           @click="activeTab = 'terminal'"
           class="text-[11px] font-bold uppercase tracking-widest transition-colors"
           :class="activeTab === 'terminal' ? 'text-white/80' : 'text-white/30 hover:text-white/50'"
-        >TERMINAL</button>
+        >Terminal</button>
         <button
           @click="activeTab = 'output'"
           class="text-[11px] font-bold uppercase tracking-widest transition-colors"
           :class="activeTab === 'output' ? 'text-white/80' : 'text-white/30 hover:text-white/50'"
-        >СИСТЕМНИЙ ВИВІД</button>
+        >Output</button>
       </div>
 
       <div class="flex items-center gap-2" @mousedown.stop>
@@ -110,7 +108,7 @@ onBeforeUnmount(() => {
           class="text-[10px] font-bold uppercase tracking-widest text-white/25 hover:text-white/55 transition-colors flex items-center gap-1"
         >
           <Trash2 :size="11" />
-          ОЧИСТИТИ
+          Clear
         </button>
         <button
           @click="store.isBottomPanelVisible = false"
@@ -119,38 +117,30 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <!-- Terminal content -->
     <div class="flex-1 relative bg-[#0b0b0e]" style="min-height:0">
       <div ref="terminalEl" class="absolute inset-0 p-1.5"></div>
     </div>
 
-    <!-- Resize handles -->
-    <!-- North -->
     <div
       class="absolute top-0 left-3 right-3 h-1.5 cursor-n-resize z-10 hover:bg-blue-500/30 transition-colors rounded-full"
       @mousedown="startResize($event, 'n')"
     ></div>
-    <!-- East -->
     <div
       class="absolute top-3 right-0 bottom-3 w-1.5 cursor-e-resize z-10 hover:bg-blue-500/30 transition-colors rounded-full"
       @mousedown="startResize($event, 'e')"
     ></div>
-    <!-- West -->
     <div
       class="absolute top-3 left-0 bottom-3 w-1.5 cursor-w-resize z-10 hover:bg-blue-500/30 transition-colors rounded-full"
       @mousedown="startResize($event, 'w')"
     ></div>
-    <!-- South -->
     <div
       class="absolute bottom-0 left-3 right-3 h-1.5 cursor-s-resize z-10 hover:bg-blue-500/30 transition-colors rounded-full"
       @mousedown="startResize($event, 's')"
     ></div>
-    <!-- NE corner -->
     <div
       class="absolute top-0 right-0 w-4 h-4 cursor-ne-resize z-20"
       @mousedown="startResize($event, 'ne')"
     ></div>
-    <!-- NW corner -->
     <div
       class="absolute top-0 left-0 w-4 h-4 cursor-nw-resize z-20"
       @mousedown="startResize($event, 'nw')"

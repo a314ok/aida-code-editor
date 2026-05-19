@@ -28,7 +28,7 @@
 
 - Floating browser window з URL bar, tabs, back/forward/reload і локальним HTML preview з редактора.
 - Inspector для same-origin/local preview: DOM tree, selected element, computed styles, console.
-- Для зовнішніх сайтів потрібна Tauri/WebView стратегія, бо багато сайтів блокують iframe.
+- Для зовнішніх сайтів потрібна Electron BrowserView стратегія, бо багато сайтів блокують iframe.
 
 ## P2: Backend/API Tools
 
